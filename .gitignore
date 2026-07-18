@@ -1,0 +1,12 @@
+# OpenTofu
+# NOTE: .terraform.lock.hcl IS committed on purpose (reproducible provider
+# versions). It now records registry.opentofu.org hashes, not registry.terraform.io.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!terraform.tfvars.example
+tfplan
+tfplan.*
+crash.log
+.env

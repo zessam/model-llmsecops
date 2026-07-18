@@ -1,0 +1,139 @@
+name: Infra Destroy
+
+# Tears down the ENTIRE stack created by Infra Build: GKE cluster, both node
+# pools, VPC + NAT, Artifact Registry, and the model bucket.
+#
+# THIS DESTROYS DATA. modules/storage sets force_destroy = true on the model
+# bucket, so every object in it is deleted with the bucket — the weights are
+# not recoverable from GCS afterwards.
+#
+# Two-key turn: you must type "destroy" AND the exact target project ID, so a
+# muscle-memory run cannot tear down the wrong project.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "destroy" to confirm teardown of ALL infra'
+        required: true
+        default: ""
+      project_id:
+        description: "Type the target GCP project ID (must match the configured project)"
+        required: true
+        default: ""
+
+# Shares a concurrency group with Infra Build so a destroy can never run
+# alongside an apply. The GCS backend takes a state lock either way, but
+# queueing turns a confusing lock error into an orderly wait.
+concurrency:
+  group: infra-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write # required for Workload Identity Federation (keyless auth)
+
+env:
+  TOFU_VERSION: 1.12.4
+
+jobs:
+  destroy:
+    name: Tofu Destroy
+    runs-on: ubuntu-latest
+    environment: production # REQUIRED REVIEWERS here => manual approval gate
+    defaults:
+      run:
+        working-directory: terraform
+    env:
+      TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
+      TF_VAR_state_bucket: ${{ vars.TF_STATE_BUCKET }}
+
+    steps:
+      # Inputs go through env, never directly into the script body. Interpolating
+      # ${{ github.event.inputs.* }} straight into `run:` lets anyone who can
+      # dispatch the workflow inject shell.
+      - name: Verify confirmation
+        env:
+          CONFIRM: ${{ github.event.inputs.confirm }}
+          TYPED_PROJECT: ${{ github.event.inputs.project_id }}
+          REAL_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          if [ "$CONFIRM" != "destroy" ]; then
+            echo "::error::You must type 'destroy' to confirm."
+            exit 1
+          fi
+          if [ "$TYPED_PROJECT" != "$REAL_PROJECT" ]; then
+            echo "::error::Project ID does not match the configured target project. Refusing to destroy."
+            exit 1
+          fi
+          echo "Confirmed teardown of project $REAL_PROJECT"
+
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Authenticate to Google Cloud (WIF)
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.WORKLOAD_PROVIDER }}
+          service_account: ${{ secrets.SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+          tofu_wrapper: false
+
+      - name: Tofu Init
+        # No -backend-config: bucket comes from TF_VAR_state_bucket via early
+        # variable evaluation.
+        run: tofu init -input=false
+
+      # A destroy is the single most destructive operation in this repo and the
+      # state is what makes the resources recoverable/importable afterwards.
+      # Snapshot it to a timestamped object BEFORE touching anything.
+      - name: Back up state before destroy
+        run: |
+          STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+          DEST="gs://${TF_VAR_state_bucket}/model-llmsecops/state-backups/pre-destroy-${STAMP}.json"
+          tofu state pull > /tmp/state-backup.json
+          echo "state serial: $(python3 -c 'import json;print(json.load(open("/tmp/state-backup.json"))["serial"])')"
+          gcloud storage cp /tmp/state-backup.json "$DEST"
+          echo "Backed up to $DEST"
+          echo "STATE_BACKUP=$DEST" >> "$GITHUB_ENV"
+
+      # Plan the destroy first, so what gets torn down is recorded in the run
+      # log and is exactly what the apply step executes. `destroy -auto-approve`
+      # in one shot leaves no record of what was removed.
+      - name: Plan destroy
+        run: |
+          tofu plan -destroy -input=false -out=tfplan-destroy
+          tofu show -no-color tfplan-destroy > destroy-plan.txt
+          COUNT="$(grep -cE '^  # .* will be destroyed' destroy-plan.txt || true)"
+          {
+            echo "## Destroy plan"
+            echo ""
+            echo "**${COUNT} resources will be destroyed** in \`${TF_VAR_project_id}\`."
+            echo ""
+            echo "State backed up to \`${STATE_BACKUP}\`."
+            echo ""
+            echo '```'
+            grep -E '^  # .* will be destroyed' destroy-plan.txt || echo "(none)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload destroy plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: destroy-plan
+          path: terraform/destroy-plan.txt
+          retention-days: 7
+
+      - name: Tofu Destroy
+        # Applies the SAVED destroy plan — what was printed above is what runs.
+        run: tofu apply -input=false -auto-approve tfplan-destroy
+
+      - name: Confirm teardown
+        if: always()
+        run: |
+          echo "Remaining resources in state: $(tofu state list | wc -l)"
+          tofu state list || true

@@ -1,0 +1,262 @@
+name: Infra Build
+
+# Security-gated pipeline for the GKE + GCS + Artifact Registry infra (OpenTofu).
+#
+#   Stage 1  parallel source gates — validate+test, trivy, checkov, gitleaks.
+#            None of these touch GCP or need credentials.
+#   Stage 2  plan — depends on ALL stage-1 gates. First job needing WIF auth.
+#   Stage 3  policy — OPA/conftest against the PLAN JSON, not the HCL. The plan
+#            schema is fully resolved, so policies see real values rather than
+#            unevaluated expressions. This is the hard gate.
+#   Stage 4  apply — waits for approval on the `production` environment.
+#
+# This is OpenTofu, not Terraform. `backend.tf` puts var.state_bucket inside the
+# backend block (early variable evaluation), which Terraform rejects outright.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "terraform/**"
+      - ".github/workflows/infra-build.yml"
+  pull_request:
+    paths:
+      - "terraform/**"
+      - ".github/workflows/infra-build.yml"
+
+concurrency:
+  group: infra-${{ github.ref }}
+  # Deliberately NOT cancel-in-progress: killing a job mid-`apply` can leave
+  # resources created but unrecorded in state. Queue instead of cancel.
+  cancel-in-progress: false
+
+# id-token: write is required for Workload Identity Federation (keyless auth).
+permissions:
+  contents: read
+  id-token: write
+  security-events: write # upload SARIF to the Security tab
+  pull-requests: read
+
+env:
+  TOFU_VERSION: 1.12.4
+  CONFTEST_VERSION: 0.56.0
+  GITLEAKS_VERSION: 8.18.4
+
+jobs:
+  # ===========================================================================
+  # STAGE 1 — parallel source gates. No cloud credentials, no network to GCP.
+  # ===========================================================================
+
+  validate:
+    name: Validate + Guardrail Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+
+      - name: fmt + validate + test
+        working-directory: terraform
+        run: |
+          tofu fmt -check -recursive
+
+          # -backend=false skips backend init entirely, so this needs no state
+          # bucket and no GCP auth. It also installs the modules referenced from
+          # tests/*.tftest.hcl — without an init, `tofu test` fails with
+          # "Module not installed", because test modules are installed
+          # separately from the root configuration.
+          tofu init -backend=false -input=false
+          tofu validate
+
+          # Mocked providers: asserts on the plan with zero cloud calls, so the
+          # guardrails (serve pool scales to zero, bucket is private, Cloud Armor
+          # rule ordering) are checked in seconds before we ever reach `plan`.
+          tofu test
+
+  trivy:
+    name: Trivy (IaC scan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Trivy config scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          scan-ref: terraform
+          format: sarif
+          output: trivy.sarif
+          # Report-only. The deterministic gate is conftest against the plan
+          # JSON in stage 3; this surfaces findings to the Security tab without
+          # blocking on scanner-version drift.
+          exit-code: "0"
+
+      - name: Upload Trivy SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy.sarif
+          category: trivy
+
+  checkov:
+    name: Checkov (IaC scan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: terraform
+          framework: terraform
+          output_format: cli,sarif
+          output_file_path: console,checkov.sarif
+          soft_fail: true # findings surfaced, not hard-blocking
+
+      - name: Upload Checkov SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: checkov.sarif
+          category: checkov
+
+  gitleaks:
+    name: gitleaks (secret scan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # full history for secret scanning
+
+      - name: gitleaks
+        run: |
+          curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o /tmp/gitleaks.tgz
+          tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
+          sudo install /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks detect --source . --redact --exit-code 1
+
+  # ===========================================================================
+  # STAGE 2 — plan (depends on ALL stage-1 gates)
+  # ===========================================================================
+  plan:
+    name: Tofu Plan
+    runs-on: ubuntu-latest
+    needs: [validate, trivy, checkov, gitleaks]
+    # Auth secrets + TF_STATE_BUCKET live in the `production` environment.
+    environment: production
+    defaults:
+      run:
+        working-directory: terraform
+    env:
+      TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
+      TF_VAR_state_bucket: ${{ vars.TF_STATE_BUCKET }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Authenticate to Google Cloud (WIF)
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.WORKLOAD_PROVIDER }}
+          service_account: ${{ secrets.SERVICE_ACCOUNT }}
+
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+          # The wrapper tees stdout for step outputs, which corrupts the
+          # redirect into plan.json below. Off for any job that pipes tofu.
+          tofu_wrapper: false
+
+      - name: Tofu Init
+        # No -backend-config: the bucket comes from TF_VAR_state_bucket via
+        # early variable evaluation. This is the OpenTofu-only bit.
+        run: tofu init -input=false
+
+      - name: Tofu Plan
+        run: |
+          tofu plan -input=false -out=tfplan
+          tofu show -json tfplan > plan.json
+
+      - name: Upload plan artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: |
+            terraform/tfplan
+            terraform/plan.json
+          # The plan contains the resolved network layout, SA emails and IAM
+          # bindings in cleartext. Keep the retention window as short as the
+          # pipeline allows.
+          retention-days: 1
+
+  # ===========================================================================
+  # STAGE 3 — OPA policy against the PLAN JSON (stable, fully-resolved schema)
+  # ===========================================================================
+  policy:
+    name: OPA Policy (conftest)
+    runs-on: ubuntu-latest
+    needs: plan
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download plan artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+          path: plan
+
+      - name: Setup conftest
+        run: |
+          curl -sSL "https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin conftest
+
+      - name: Conftest policy check (plan JSON)
+        # No soft-fail. This is the gate that actually blocks a bad apply.
+        run: conftest test plan/plan.json -p terraform/policy
+
+  # ===========================================================================
+  # STAGE 4 — apply (queued after policy; WAITS FOR APPROVAL on `production`)
+  #           Never applies from a pull request.
+  # ===========================================================================
+  apply:
+    name: Tofu Apply
+    runs-on: ubuntu-latest
+    needs: policy
+    if: github.event_name != 'pull_request'
+    environment: production # REQUIRED REVIEWERS here => apply waits for approval
+    defaults:
+      run:
+        working-directory: terraform
+    env:
+      TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
+      TF_VAR_state_bucket: ${{ vars.TF_STATE_BUCKET }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Authenticate to Google Cloud (WIF)
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.WORKLOAD_PROVIDER }}
+          service_account: ${{ secrets.SERVICE_ACCOUNT }}
+
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+          tofu_wrapper: false
+
+      - name: Tofu Init
+        run: tofu init -input=false
+
+      - name: Download plan artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+          path: terraform
+
+      - name: Tofu Apply
+        # Applies the SAVED plan, not a fresh one — what was reviewed and what
+        # policy passed is exactly what runs.
+        run: tofu apply -input=false -auto-approve tfplan
+
+      - name: Outputs
+        run: tofu output

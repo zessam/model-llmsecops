@@ -1,0 +1,25 @@
+# Copy to terraform.tfvars for local runs (CI passes these via TF_VAR_*).
+#
+# state_bucket is read during early evaluation, before the backend is
+# initialised, so keeping it in this file means `tofu init` needs no flags.
+project_id   = "my-gcp-project-id"
+state_bucket = "my-tfstate-bucket"
+
+# Optional overrides (defaults shown):
+# region              = "us-central1"
+# zone                = "us-central1-c"
+# cluster_name        = "model-llmsecops-cluster"   # max 24 chars (prefixes SA IDs)
+# artifact_repo_name  = "model-llmsecops"
+# model_bucket_name   = ""            # defaults to <project_id>-model-llmsecops-models
+# app_machine_type    = "e2-standard-2"    # app pool (autoscale 1->2)
+# serve_machine_type  = "e2-highmem-4"     # vLLM CPU serving pool, 32GB (scales 0->1)
+# k8s_namespace       = "default"
+# k8s_service_account = "model-llmsecops-sa"
+
+# --- Load balancer (off by default, ~$30/mo when on) -----------------------
+# Needs a real domain for HTTPS; without one you get an IP + Cloud Armor only.
+# enable_load_balancer      = false
+# app_domain                = ""     # e.g. "model.example.com"
+# dns_zone_name             = ""     # Cloud DNS zone; empty = manage DNS externally
+# app_allowed_cidrs         = []     # non-empty => deny everything else (max 5)
+# app_rate_limit_per_minute = 300
