@@ -18,7 +18,10 @@ spec:
           args:
             - |
               set -e
-              pip install --quiet "lm-eval[api]" transformers
+              # Pinned for the same reason guidellm is: an unpinned install picks up
+              # whatever minor is current, and these eval CLIs rename flags across
+              # minors. 0.4.12 is verified against this Job's --model_args.
+              pip install --quiet "lm-eval[api]==0.4.12" transformers
               ROUTER=http://vllm-router-service.default.svc.cluster.local:80/v1/completions
               # CPU inference is slow: keep --limit tiny and cap generation length.
               lm_eval --model local-completions \

@@ -28,7 +28,7 @@ data:
           "targets": [
             {
               "expr": "lm_eval_score",
-              "legendFormat": "{{task}} / {{metric}}",
+              "legendFormat": "{{task}} / {{metric}} ({{filter}})",
               "refId": "A"
             }
           ],
@@ -44,7 +44,7 @@ data:
           "targets": [
             {
               "expr": "lm_eval_score",
-              "legendFormat": "{{task}} / {{metric}}",
+              "legendFormat": "{{task}} / {{metric}} ({{filter}})",
               "refId": "A"
             }
           ]
@@ -61,7 +61,7 @@ data:
           "targets": [
             {
               "expr": "guidellm_metric",
-              "legendFormat": "{{stat}}",
+              "legendFormat": "{{metric}} {{stat}}",
               "format": "table",
               "instant": true,
               "refId": "A"

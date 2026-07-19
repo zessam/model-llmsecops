@@ -26,55 +26,62 @@ spec:
               # dependency) imports at module load — guidellm fails to import at
               # all without this pin. 2.5.2 is the newest working version.
               # guidellm is pinned: an unpinned install already broke this Job once
-              # when 0.7.x renamed --output-path to --output. The CLI is not stable
-              # across minors, so bump this deliberately, not implicitly.
+              # when 0.7.x replaced --output-path with --output. The CLI is not
+              # stable across minors, so bump this deliberately, not implicitly.
               pip install --quiet "guidellm==0.7.1" "tracerite<2.6"
               guidellm run \
                 --backend "kind=openai_http,target=http://vllm-router-service.default.svc.cluster.local:80" \
                 --profile "kind=constant,rate=1" \
                 --constraint "kind=max_duration,seconds=60" \
                 --data "kind=synthetic_text,prompt_tokens=64,output_tokens=64" \
-                --output /tmp/guidellm.json
+                --output "kind=json,path=/tmp/guidellm.json"
 
-              # The report JSON schema shifts between guidellm versions, so this
-              # walks it generically rather than assuming a shape: every numeric
-              # leaf whose path looks perf-related becomes one series. Never fails
-              # the Job — the load itself is already visible in the serving metrics.
+              # Read the measured numbers straight out of benchmarks[].metrics.
+              # An earlier version walked the whole report for perf-looking numeric
+              # leaves and took the first 100 — but the report leads with a ~50-entry
+              # echo of the run config, so the cap was spent before reaching any
+              # real metric and the Grafana table showed config values instead.
+              # Never fails the Job — the load itself is already visible in the
+              # serving metrics.
               python - <<'PY' || echo "push failed; load-generated serving metrics are still in Prometheus"
               import json, re, urllib.request
 
-              KEEP = ("latency", "token", "throughput", "request", "duration",
-                      "concurren", "rate", "ttft", "itl")
-              MAX_SERIES = 100
+              # Each metric holds successful/errored/incomplete/total; "successful"
+              # is the one worth charting. Percentiles live one level down.
+              STATS = ("mean", "median", "min", "max", "count")
+              PERCENTILES = ("p50", "p95", "p99")
 
-              def walk(node, path=()):
-                  if isinstance(node, dict):
-                      for k, v in node.items():
-                          yield from walk(v, path + (str(k),))
-                  elif isinstance(node, list):
-                      for i, v in enumerate(node):
-                          yield from walk(v, path + (str(i),))
-                  elif isinstance(node, bool):
-                      return
-                  elif isinstance(node, (int, float)):
-                      yield path, node
+              def sanitize(s):
+                  return re.sub(r"[^a-z0-9_]", "_", str(s).lower())[:120]
 
               report = json.load(open("/tmp/guidellm.json"))
-              lines, seen = ["# TYPE guidellm_metric gauge"], 0
-              for path, val in walk(report):
-                  joined = "_".join(path).lower()
-                  if not any(k in joined for k in KEEP):
-                      continue
-                  stat = re.sub(r"[^a-z0-9_]", "_", joined)[:120]
-                  lines.append(f'guidellm_metric{{stat="{stat}"}} {val}')
-                  seen += 1
-                  if seen >= MAX_SERIES:
-                      break
+              lines = ["# TYPE guidellm_metric gauge"]
+
+              for idx, bench in enumerate(report.get("benchmarks", [])):
+                  for metric, buckets in (bench.get("metrics") or {}).items():
+                      if not isinstance(buckets, dict):
+                          continue
+                      vals = buckets.get("successful")
+                      if not isinstance(vals, dict):
+                          continue  # text/image/audio blocks have no such bucket
+                      emit = {s: vals.get(s) for s in STATS}
+                      pct = vals.get("percentiles") or {}
+                      emit.update({p: pct.get(p) for p in PERCENTILES})
+                      for stat, val in emit.items():
+                          if not isinstance(val, (int, float)) or isinstance(val, bool):
+                              continue
+                          labels = (f'benchmark="{idx}",metric="{sanitize(metric)}"'
+                                    f',stat="{stat}"')
+                          lines.append(f'guidellm_metric{{{labels}}} {val}')
+
+              if len(lines) == 1:
+                  raise SystemExit("no metrics found in report; schema may have changed")
 
               body = "\n".join(lines) + "\n"
               url = "http://pushgateway.monitoring.svc.cluster.local:9091/metrics/job/guidellm/model/smollm2_135m"
               req = urllib.request.Request(url, data=body.encode(), method="POST")
-              print("pushgateway status:", urllib.request.urlopen(req).status, "series:", seen)
+              print("pushgateway status:", urllib.request.urlopen(req).status,
+                    "series:", len(lines) - 1)
               print(body)
               PY
           resources:
