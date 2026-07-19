@@ -38,6 +38,12 @@ jobs:
       TF_VAR_state_bucket: ${{ vars.TF_STATE_BUCKET }}
 
     steps:
+      # Must precede any `run:` step — the job sets working-directory: terraform,
+      # which does not exist until the repo is checked out, and bash then fails
+      # to start at all.
+      - name: Checkout
+        uses: actions/checkout@v5
+
       # Inputs via env, never interpolated into the script body (shell injection).
       - name: Verify confirmation
         env:
@@ -53,9 +59,6 @@ jobs:
             echo "::error::Project ID does not match the configured target project."
             exit 1
           fi
-
-      - name: Checkout
-        uses: actions/checkout@v5
 
       - name: Authenticate to Google Cloud (WIF)
         uses: google-github-actions/auth@v3
