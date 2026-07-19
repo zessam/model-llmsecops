@@ -76,9 +76,9 @@ jobs:
           workload_identity_provider: ${{ secrets.WORKLOAD_PROVIDER }}
           service_account: ${{ secrets.SERVICE_ACCOUNT }}
 
-      - uses: google-github-actions/setup-gcloud@v2
+      - uses: google-github-actions/setup-gcloud@v3
 
-      - uses: opentofu/setup-opentofu@v1
+      - uses: opentofu/setup-opentofu@v2
         with:
           tofu_version: ${{ env.TOFU_VERSION }}
           tofu_wrapper: false
@@ -122,7 +122,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload destroy plan
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: destroy-plan
           path: terraform/destroy-plan.txt

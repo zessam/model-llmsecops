@@ -10,3 +10,4 @@ tfplan
 tfplan.*
 crash.log
 .env
+.claude
