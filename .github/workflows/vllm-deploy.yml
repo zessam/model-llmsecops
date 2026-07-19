@@ -134,9 +134,30 @@ jobs:
           helm repo add vllm "$CHART_REPO"
           helm repo update
 
-      - name: Deploy
+      # ServiceMonitor is a Prometheus Operator CRD, installed by observability-deploy.yml.
+      # vLLM must deploy with or without it, so drop the ServiceMonitors when it is absent.
+      - name: Detect Prometheus Operator CRDs
+        id: crds
         run: |
+          if kubectl get crd servicemonitors.monitoring.coreos.com >/dev/null 2>&1; then
+            echo "monitoring=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "monitoring=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::ServiceMonitor CRD not found — deploying vLLM without Prometheus scrape config. Run observability-deploy.yml, then re-run this workflow to enable metrics."
+          fi
+
+      - name: Deploy
+        env:
+          MONITORING: ${{ steps.crds.outputs.monitoring }}
+        run: |
+          extra=()
+          if [ "$MONITORING" != "true" ]; then
+            extra+=(--set servingEngineSpec.serviceMonitor.enabled=false
+                    --set routerSpec.serviceMonitor.enabled=false)
+          fi
+
           helm upgrade --install "$RELEASE" "$CHART" \
             --version "$CHART_VERSION" \
             -n "$NAMESPACE" --create-namespace \
-            -f "$VALUES"
+            -f "$VALUES" \
+            "${extra[@]}"
