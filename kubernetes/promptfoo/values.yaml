@@ -28,6 +28,17 @@ service:
   type: LoadBalancer
   port: 3000
 
+# Without this the pod crash-loops on startup with:
+#   EACCES: permission denied, open '/home/promptfoo/.promptfoo/promptfoo.yaml'
+# A freshly provisioned PD volume is owned by root, but the image runs as a
+# non-root user, so promptfoo cannot write its config file into the mount.
+#
+# fsGroup fixes it without needing to know the image's uid: Kubernetes chgrps
+# the volume to this group, makes it group-writable, and adds the group as a
+# supplementary group on the container process — whatever uid it runs as.
+podSecurityContext:
+  fsGroup: 1000
+
 persistentVolumesClaims: # sic — the chart misspells this key; "persistentVolumeClaims" is silently ignored
   - name: promptfoo
     size: 10Gi # 1Gi default fills fast; each redteam eval stores every probe + response

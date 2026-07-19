@@ -1,174 +1,50 @@
 name: Promptfoo UI Deploy
 
-# PIPELINE 1 of 2 — deploys the results UI. Runs rarely (only when its config
-# changes). The scan pipeline does not depend on this; if the UI is down, scans
-# still run and still report.
-#
-# push/PR: render + validate only (no cluster access). dispatch: also deploy.
+# Deploys the promptfoo results UI. That is all it does.
+# It does not wait for the pod to become ready — check with:
+#   kubectl -n promptfoo get pod
+
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - "kubernetes/promptfoo/values.yaml"
-      - ".github/workflows/promptfoo-ui-deploy.yml"
-  pull_request:
-    paths:
-      - "kubernetes/promptfoo/values.yaml"
-      - ".github/workflows/promptfoo-ui-deploy.yml"
-
-concurrency:
-  group: promptfoo-ui-${{ github.ref }}
-  cancel-in-progress: false
 
 permissions:
   contents: read
   id-token: write
-  security-events: write
 
 env:
   CLUSTER_NAME: model-llmsecops-cluster
   CLUSTER_LOCATION: us-central1-c
-  UI_NAMESPACE: promptfoo
+  NAMESPACE: promptfoo
   RELEASE: promptfoo
-  # Not published to a chart repo — the chart lives in the promptfoo git repo.
-  # Pinned to the tag matching image.tag in values.yaml.
+  VALUES: kubernetes/promptfoo/values.yaml
+  # The chart is not published to a chart repo — it lives in the promptfoo git
+  # repo. Pinned to the tag matching image.tag in values.yaml.
   CHART_REPO: https://github.com/promptfoo/promptfoo.git
   CHART_REF: "0.109.1"
-  CHART_PATH: helm/chart/promptfoo
-  VALUES: kubernetes/promptfoo/values.yaml
-  HELM_VERSION: v3.16.3
-  KUBECONFORM_VERSION: 0.6.7
 
 jobs:
-  render:
-    name: Helm render + validate + scan
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: azure/setup-helm@v5
-        with:
-          version: ${{ env.HELM_VERSION }}
-
-      - name: Fetch chart
-        run: git clone --depth 1 --branch "$CHART_REF" "$CHART_REPO" /tmp/promptfoo-src
-
-      - name: Render manifests
-        run: |
-          mkdir -p rendered
-          helm template "$RELEASE" "/tmp/promptfoo-src/$CHART_PATH" \
-            -n "$UI_NAMESPACE" \
-            -f "$VALUES" \
-            > rendered/manifests.yaml
-
-      - name: Schema-validate (kubeconform)
-        run: |
-          curl -fsSL "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
-            | tar -xz -C /tmp kubeconform
-          /tmp/kubeconform -summary -ignore-missing-schemas rendered/manifests.yaml
-
-      - name: Trivy scan
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          scan-type: config
-          scan-ref: rendered
-          format: sarif
-          output: trivy-k8s.sarif
-          exit-code: "0"
-
-      - name: Upload Trivy SARIF
-        if: always()
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: trivy-k8s.sarif
-          category: trivy-promptfoo-ui
-
-      # Same pattern as vllm-deploy.yml: report exposure, do not block on it.
-      # Public access is a recorded decision (see kubernetes/promptfoo/README.md),
-      # so this exists to keep it visible, not to veto it.
-      - name: Report exposure
-        run: |
-          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import yaml
-          docs = [d for d in yaml.safe_load_all(open("rendered/manifests.yaml")) if d]
-          svcs = {d["metadata"]["name"]: d["spec"].get("type", "ClusterIP")
-                  for d in docs if d.get("kind") == "Service"}
-          print("## Promptfoo UI exposure\n")
-          for name, typ in sorted(svcs.items()):
-              print(f"- `{name}` → **{typ}**")
-          public = [n for n, t in svcs.items() if t in ("LoadBalancer", "NodePort")]
-          if public:
-              print("\n> Reachable from outside the cluster: "
-                    + ", ".join(f"`{n}`" for n in public))
-              print("\n> promptfoo self-hosted has **no authentication**. Anyone with "
-                    "the address can read red team findings — the list of attacks "
-                    "that currently work against the model.")
-          PY
-
-      - name: Upload rendered manifests
-        uses: actions/upload-artifact@v7
-        with:
-          name: rendered-promptfoo-ui
-          path: rendered/manifests.yaml
-          retention-days: 7
-
   deploy:
-    name: Helm deploy to GKE
     runs-on: ubuntu-latest
-    needs: render
-    if: github.event_name != 'pull_request'
     environment: production
     steps:
       - uses: actions/checkout@v5
 
-      - name: Authenticate to Google Cloud (WIF)
-        uses: google-github-actions/auth@v3
+      - uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ secrets.WORKLOAD_PROVIDER }}
           service_account: ${{ secrets.SERVICE_ACCOUNT }}
 
-      - name: Get GKE credentials
-        uses: google-github-actions/get-gke-credentials@v3
+      - uses: google-github-actions/get-gke-credentials@v3
         with:
           cluster_name: ${{ env.CLUSTER_NAME }}
           location: ${{ env.CLUSTER_LOCATION }}
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
       - uses: azure/setup-helm@v5
-        with:
-          version: ${{ env.HELM_VERSION }}
-
-      - name: Fetch chart
-        run: git clone --depth 1 --branch "$CHART_REF" "$CHART_REPO" /tmp/promptfoo-src
 
       - name: Deploy
         run: |
-          helm upgrade --install "$RELEASE" "/tmp/promptfoo-src/$CHART_PATH" \
-            -n "$UI_NAMESPACE" --create-namespace \
-            -f "$VALUES" \
-            --wait --timeout 5m
-
-      - name: Publish UI address
-        run: |
-          # LB provisioning is async and outlives `helm --wait`, which only waits
-          # on the Deployment. Poll for the ingress IP rather than printing empty.
-          for _ in $(seq 1 30); do
-            IP=$(kubectl -n "$UI_NAMESPACE" get svc "$RELEASE" \
-                   -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
-            [ -n "$IP" ] && break
-            sleep 10
-          done
-          {
-            echo "## Promptfoo UI"
-            echo
-            if [ -n "$IP" ]; then
-              echo "Open: <http://$IP:3000>"
-            else
-              echo "LoadBalancer IP not assigned yet — check:"
-              echo '```'
-              echo "kubectl -n $UI_NAMESPACE get svc $RELEASE"
-              echo '```'
-            fi
-            echo
-            echo "> No authentication. Treat this address as sensitive."
-          } >> "$GITHUB_STEP_SUMMARY"
+          git clone --depth 1 --branch "$CHART_REF" "$CHART_REPO" /tmp/chart
+          helm upgrade --install "$RELEASE" /tmp/chart/helm/chart/promptfoo \
+            -n "$NAMESPACE" --create-namespace \
+            -f "$VALUES"

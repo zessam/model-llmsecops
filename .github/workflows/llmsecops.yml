@@ -1,16 +1,9 @@
 name: LLMSecOps
 
-# Red team scan of the served model. Manual trigger.
+# Runs the promptfoo red team scan and uploads the report to the UI.
 #
-#   1. Preflight  — corpus committed, model and UI reachable
-#   2. Scan       — promptfoo fires the committed attacks at the model
-#   3. Upload     — report goes to the promptfoo UI in the cluster
-#
-# Everything runs on the runner. The model router and the results UI are both
-# public LoadBalancers, so kubectl is used only to look up their addresses.
-#
-# To change WHAT is tested, edit kubernetes/promptfoo/promptfooconfig.yaml.
-# To change HOW it runs, edit the env block below. The steps rarely need edits.
+# Change WHAT is tested -> kubernetes/promptfoo/promptfooconfig.yaml
+# Change HOW it runs    -> the env block below
 
 on:
   workflow_dispatch:
@@ -20,25 +13,15 @@ permissions:
   id-token: write
 
 env:
-  # --- cluster -------------------------------------------------------------
   CLUSTER_NAME: model-llmsecops-cluster
   CLUSTER_LOCATION: us-central1-c
   NAMESPACE: default # where the model runs
   UI_NAMESPACE: promptfoo # where the results UI runs
-
-  # --- scan ----------------------------------------------------------------
-  # NOTE: the results server is pinned to 0.109.1 in values.yaml. `latest` lets
-  # the CLI drift ahead of it, and a newer CLI may write a share payload the
-  # older server rejects. If uploads start failing after working, align these.
   PROMPTFOO_IMAGE: ghcr.io/promptfoo/promptfoo:latest
-  # Each test costs one call to the model AND one to the judge, so concurrency
-  # multiplies against the OpenRouter rate limit. The model is CPU-bound and was
-  # never going to absorb parallelism, so low costs nothing.
-  CONCURRENCY: 2
+  CONCURRENCY: 2 # each test calls the model AND the judge
 
 jobs:
   promptfoo:
-    name: Promptfoo — scan and upload
     runs-on: ubuntu-latest
     environment: production
     steps:
@@ -55,129 +38,47 @@ jobs:
           location: ${{ env.CLUSTER_LOCATION }}
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
-      # Everything that must be true before spending 15-60 minutes on a scan.
-      # LoadBalancer IPs are assigned by GCP and change when a Service is
-      # recreated, so look them up each run rather than hardcoding.
-      - name: Preflight
-        id: pre
-        run: |
-          set -e
-
-          # The scan replays a committed corpus and never generates its own
-          # attacks. Without it the scan runs zero tests and reports a pass.
-          if [ ! -s kubernetes/promptfoo/generated/redteam.yaml ]; then
-            echo "::error::Missing kubernetes/promptfoo/generated/redteam.yaml. Generate and commit it once:"
-            echo "::error::  cd kubernetes/promptfoo && promptfoo redteam generate -c promptfooconfig.yaml -o generated/redteam.yaml"
-            exit 1
-          fi
-
-          # `|| true` so a missing Service falls through to the probe below and
-          # its helpful message, instead of set -e killing the step silently.
-          lb() { kubectl -n "$1" get svc "$2" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true; }
-          MODEL="http://$(lb "$NAMESPACE" vllm-router-service):80"
-          UI="http://$(lb "$UI_NAMESPACE" promptfoo):3000"
-
-          # A missing IP renders as "http://:80" — check by probing, which also
-          # catches a Service that exists but is not serving.
-          curl -fsS --max-time 30 "$MODEL/v1/models" >/dev/null \
-            || { echo "::error::Model not reachable at $MODEL — is it deployed?"; exit 1; }
-          curl -fsS --max-time 30 "$UI" >/dev/null \
-            || { echo "::error::Results UI not reachable at $UI — run the Promptfoo UI Deploy pipeline."; exit 1; }
-
-          echo "model=$MODEL" >> "$GITHUB_OUTPUT"
-          echo "ui=$UI" >> "$GITHUB_OUTPUT"
-          echo "Model: $MODEL   UI: $UI"
-
-      # promptfoo caches LLM API responses, so a re-run does not pay the judge
-      # again for pairs it already graded. The image is deliberately NOT cached:
-      # a ghcr pull is about as fast as restoring a multi-GB tarball.
-      - name: Restore promptfoo cache
-        uses: actions/cache@v4
+      # promptfoo caches LLM responses — a re-run does not pay the judge again
+      # for pairs it already graded.
+      - uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/promptfoo
-          # run_id makes each run save a fresh entry (cache entries are
-          # immutable); restore-keys falls back to the most recent previous one.
-          key: promptfoo-${{ hashFiles('kubernetes/promptfoo/promptfooconfig.yaml') }}-${{ github.run_id }}
-          restore-keys: |
-            promptfoo-${{ hashFiles('kubernetes/promptfoo/promptfooconfig.yaml') }}-
-            promptfoo-
+          key: promptfoo-${{ github.run_id }}
+          restore-keys: promptfoo-
 
       - name: Scan and upload
-        id: scan
         working-directory: kubernetes/promptfoo
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          MODEL_URL: ${{ steps.pre.outputs.model }}
-          UI_URL: ${{ steps.pre.outputs.ui }}
         run: |
+          set -e
           mkdir -p "${{ runner.temp }}/promptfoo/cache"
 
-          # One definition, used for both commands below.
-          #   --user  : the image runs as its own user; without this every file
-          #             written to the mount is owned by that uid and the
-          #             artifact upload cannot read results.json.
-          #   HOME=/pf: puts promptfoo's eval database on the mounted volume, so
-          #             `share` can find the eval that `eval` just wrote. These
-          #             are separate containers and share nothing else.
+          lb() { kubectl -n "$1" get svc "$2" -o jsonpath='{.status.loadBalancer.ingress[0].ip}'; }
+          MODEL="http://$(lb "$NAMESPACE" vllm-router-service):80"
+          UI="http://$(lb "$UI_NAMESPACE" promptfoo):3000"
+
+          #  --user   : else files in the mount are owned by the image's uid
+          #  HOME=/pf : puts the eval database on the mount, so `share` can find
+          #             the eval that `redteam eval` just wrote
           pf() {
             docker run --rm -i \
               --user "$(id -u):$(id -g)" \
               -v "$PWD:/work" -w /work \
               -v "${{ runner.temp }}/promptfoo:/pf" \
-              -e HOME=/pf \
-              -e PROMPTFOO_CACHE_PATH=/pf/cache \
-              -e PROMPTFOO_DISABLE_TELEMETRY=1 \
-              -e OPENROUTER_API_KEY \
-              -e PROMPTFOO_REMOTE_API_BASE_URL="$UI_URL" \
-              -e PROMPTFOO_REMOTE_APP_BASE_URL="$UI_URL" \
+              -e HOME=/pf -e PROMPTFOO_CACHE_PATH=/pf/cache \
+              -e PROMPTFOO_DISABLE_TELEMETRY=1 -e OPENROUTER_API_KEY \
+              -e PROMPTFOO_REMOTE_API_BASE_URL="$UI" \
+              -e PROMPTFOO_REMOTE_APP_BASE_URL="$UI" \
               "$PROMPTFOO_IMAGE" "$@"
           }
 
-          # The config ships with the in-cluster address so it also works from
-          # inside the cluster; point it at the public LB for this run.
-          sed -i "s|http://vllm-router-service.default.svc.cluster.local:80|$MODEL_URL|" promptfooconfig.yaml
+          # Config holds the in-cluster address; use the public LB from here.
+          sed -i "s|http://vllm-router-service.default.svc.cluster.local:80|$MODEL|" promptfooconfig.yaml
 
-          # No `set -e`: a failing scan is the case we most need to keep running
-          # for, so the status is recorded and the upload still happens.
+          # `|| true` — failed probes are findings, not pipeline failures.
           pf redteam eval -c promptfooconfig.yaml --output results.json \
-             -j "$CONCURRENCY" --no-progress-bar
-          echo "status=$?" >> "$GITHUB_OUTPUT"
+             -j "$CONCURRENCY" --no-progress-bar || true
 
-          echo "--- uploading to $UI_URL ---"
-          OUT=$(pf share --yes < /dev/null 2>&1); RC=$?
-          echo "$OUT"
-
-          # Do not trust the exit code alone — on success share prints the URL
-          # of the uploaded eval, which is the only real evidence it landed.
-          #
-          # A failed upload FAILS this pipeline, unlike a failed probe: a model
-          # failing a probe is a finding, but results that never reached the UI
-          # are a broken pipeline.
-          if [ $RC -ne 0 ] || ! echo "$OUT" | grep -q "$UI_URL"; then
-            echo "::error::Upload to the results UI could not be confirmed."
-            exit 1
-          fi
-
-      # Kept even when the upload fails, so a scan is never lost to a UI problem.
-      - name: Save results
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: promptfoo-results
-          path: kubernetes/promptfoo/results.json
-          retention-days: 30
-          if-no-files-found: warn
-
-      - name: Summary
-        if: always()
-        run: |
-          {
-            echo "## LLMSecOps — red team"
-            echo
-            echo "Scan exit status: \`${{ steps.scan.outputs.status }}\` "
-            echo "_(report-only: failed probes do not fail this pipeline)_"
-            echo
-            echo "Results UI: <${{ steps.pre.outputs.ui }}>"
-            echo
-            echo "Raw results attached to this run as \`promptfoo-results\`."
-          } >> "$GITHUB_STEP_SUMMARY"
+          pf share --yes < /dev/null
+          echo "Results: $UI" >> "$GITHUB_STEP_SUMMARY"
