@@ -11,3 +11,6 @@ tfplan.*
 crash.log
 .env
 .claude
+# Python (security probe scripts)
+__pycache__/
+*.pyc
