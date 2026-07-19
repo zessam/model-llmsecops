@@ -1,0 +1,52 @@
+# kube-prometheus-stack values — trimmed for the free tier, Grafana public.
+#   helm upgrade --install kube-prom-stack prometheus-community/kube-prometheus-stack \
+#     -n monitoring --create-namespace -f kube-prom-stack-values.yaml
+
+alertmanager:
+  enabled: false
+
+prometheus:
+  prometheusSpec:
+    retention: 2d
+    # Select monitors in ALL namespaces regardless of release label — the vLLM
+    # ServiceMonitors come from a different Helm release, in `default`.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    resources:
+      requests: { cpu: "200m", memory: "512Mi" }
+      limits: { memory: "1Gi" }
+
+grafana:
+  # Public external IP. Password is chart-generated, never committed:
+  #   kubectl get secret kube-prom-stack-grafana -n monitoring \
+  #     -o jsonpath="{.data.admin-password}" | base64 -d
+  service:
+    type: LoadBalancer
+  grafana.ini:
+    auth.anonymous:
+      enabled: false
+    users:
+      allow_sign_up: false
+  # Auto-loads any ConfigMap labelled grafana_dashboard="1" (see dashboard.yaml).
+  sidecar:
+    dashboards:
+      enabled: true
+      searchNamespace: ALL
+  resources:
+    requests: { cpu: "100m", memory: "128Mi" }
+    limits: { memory: "256Mi" }
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 472
+    fsGroup: 472
+    seccompProfile: { type: RuntimeDefault }
+
+prometheusOperator:
+  resources:
+    requests: { cpu: "100m", memory: "128Mi" }
+    limits: { memory: "256Mi" }
+
+kube-state-metrics:
+  resources:
+    requests: { cpu: "50m", memory: "64Mi" }
+    limits: { memory: "128Mi" }

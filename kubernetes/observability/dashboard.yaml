@@ -1,0 +1,127 @@
+# Grafana dashboard for LLM quality + performance. The kube-prometheus-stack
+# sidecar auto-loads any ConfigMap carrying the grafana_dashboard="1" label.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: llm-quality-perf-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  llm-quality-perf.json: |
+    {
+      "title": "LLM Quality & Performance",
+      "uid": "llm-quality-perf",
+      "schemaVersion": 39,
+      "time": { "from": "now-6h", "to": "now" },
+      "refresh": "30s",
+      "panels": [
+        {
+          "type": "row",
+          "title": "Quality (lm-eval)",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+        },
+        {
+          "type": "stat",
+          "title": "lm-eval scores",
+          "gridPos": { "h": 6, "w": 12, "x": 0, "y": 1 },
+          "targets": [
+            {
+              "expr": "lm_eval_score",
+              "legendFormat": "{{task}} / {{metric}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": { "min": 0, "max": 1, "decimals": 3 },
+            "overrides": []
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "lm-eval score over time",
+          "gridPos": { "h": 6, "w": 12, "x": 12, "y": 1 },
+          "targets": [
+            {
+              "expr": "lm_eval_score",
+              "legendFormat": "{{task}} / {{metric}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "type": "row",
+          "title": "Performance (GuideLLM benchmark)",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 7 }
+        },
+        {
+          "type": "table",
+          "title": "GuideLLM report",
+          "gridPos": { "h": 9, "w": 24, "x": 0, "y": 8 },
+          "targets": [
+            {
+              "expr": "guidellm_metric",
+              "legendFormat": "{{stat}}",
+              "format": "table",
+              "instant": true,
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "type": "row",
+          "title": "Live serving (vLLM engine)",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 17 }
+        },
+        {
+          "type": "timeseries",
+          "title": "Requests running / waiting",
+          "gridPos": { "h": 7, "w": 12, "x": 0, "y": 18 },
+          "targets": [
+            { "expr": "vllm:num_requests_running", "legendFormat": "running", "refId": "A" },
+            { "expr": "vllm:num_requests_waiting", "legendFormat": "waiting", "refId": "B" }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Token throughput (tokens/s)",
+          "gridPos": { "h": 7, "w": 12, "x": 12, "y": 18 },
+          "targets": [
+            { "expr": "rate(vllm:generation_tokens_total[5m])", "legendFormat": "generation", "refId": "A" },
+            { "expr": "rate(vllm:prompt_tokens_total[5m])", "legendFormat": "prompt", "refId": "B" }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Time to first token (p50/p95)",
+          "gridPos": { "h": 7, "w": 12, "x": 0, "y": 25 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.5, sum(rate(vllm:time_to_first_token_seconds_bucket[5m])) by (le))",
+              "legendFormat": "p50", "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(vllm:time_to_first_token_seconds_bucket[5m])) by (le))",
+              "legendFormat": "p95", "refId": "B"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+        },
+        {
+          "type": "timeseries",
+          "title": "End-to-end request latency (p50/p95)",
+          "gridPos": { "h": 7, "w": 12, "x": 12, "y": 25 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.5, sum(rate(vllm:e2e_request_latency_seconds_bucket[5m])) by (le))",
+              "legendFormat": "p50", "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(vllm:e2e_request_latency_seconds_bucket[5m])) by (le))",
+              "legendFormat": "p95", "refId": "B"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+        }
+      ]
+    }

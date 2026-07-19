@@ -1,0 +1,72 @@
+# GuideLLM — PERFORMANCE. Drives controlled load at the router, then pushes its
+# summary numbers to the Pushgateway. Runs as a client on the app pool.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: guidellm-benchmark
+  namespace: default
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: guidellm
+          image: python:3.11-slim
+          command: ["bash", "-lc"]
+          args:
+            - |
+              set -e
+              pip install --quiet guidellm
+              guidellm run \
+                --backend "kind=openai_http,target=http://vllm-router-service.default.svc.cluster.local:80" \
+                --profile "kind=constant,rate=1" \
+                --constraint "kind=max_duration,seconds=60" \
+                --data "kind=synthetic_text,prompt_tokens=64,output_tokens=64" \
+                --output-path /tmp/guidellm.json
+
+              # The report JSON schema shifts between guidellm versions, so this
+              # walks it generically rather than assuming a shape: every numeric
+              # leaf whose path looks perf-related becomes one series. Never fails
+              # the Job — the load itself is already visible in the serving metrics.
+              python - <<'PY' || echo "push failed; load-generated serving metrics are still in Prometheus"
+              import json, re, urllib.request
+
+              KEEP = ("latency", "token", "throughput", "request", "duration",
+                      "concurren", "rate", "ttft", "itl")
+              MAX_SERIES = 100
+
+              def walk(node, path=()):
+                  if isinstance(node, dict):
+                      for k, v in node.items():
+                          yield from walk(v, path + (str(k),))
+                  elif isinstance(node, list):
+                      for i, v in enumerate(node):
+                          yield from walk(v, path + (str(i),))
+                  elif isinstance(node, bool):
+                      return
+                  elif isinstance(node, (int, float)):
+                      yield path, node
+
+              report = json.load(open("/tmp/guidellm.json"))
+              lines, seen = ["# TYPE guidellm_metric gauge"], 0
+              for path, val in walk(report):
+                  joined = "_".join(path).lower()
+                  if not any(k in joined for k in KEEP):
+                      continue
+                  stat = re.sub(r"[^a-z0-9_]", "_", joined)[:120]
+                  lines.append(f'guidellm_metric{{stat="{stat}"}} {val}')
+                  seen += 1
+                  if seen >= MAX_SERIES:
+                      break
+
+              body = "\n".join(lines) + "\n"
+              url = "http://pushgateway.monitoring.svc.cluster.local:9091/metrics/job/guidellm/model/qwen2_5_0_5b"
+              req = urllib.request.Request(url, data=body.encode(), method="POST")
+              print("pushgateway status:", urllib.request.urlopen(req).status, "series:", seen)
+              print(body)
+              PY
+          resources:
+            requests: { cpu: "200m", memory: "512Mi" }
+            limits: { memory: "1Gi" }
