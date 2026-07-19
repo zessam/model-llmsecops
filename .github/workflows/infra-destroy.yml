@@ -1,14 +1,7 @@
 name: Infra Destroy
 
-# Tears down the ENTIRE stack created by Infra Build: GKE cluster, both node
-# pools, VPC + NAT, Artifact Registry, and the model bucket.
-#
-# THIS DESTROYS DATA. modules/storage sets force_destroy = true on the model
-# bucket, so every object in it is deleted with the bucket — the weights are
-# not recoverable from GCS afterwards.
-#
-# Two-key turn: you must type "destroy" AND the exact target project ID, so a
-# muscle-memory run cannot tear down the wrong project.
+# Destroys the whole stack. force_destroy = true on the model bucket, so its
+# objects go with it. Requires typing "destroy" AND the target project ID.
 on:
   workflow_dispatch:
     inputs:
@@ -21,16 +14,13 @@ on:
         required: true
         default: ""
 
-# Shares a concurrency group with Infra Build so a destroy can never run
-# alongside an apply. The GCS backend takes a state lock either way, but
-# queueing turns a confusing lock error into an orderly wait.
 concurrency:
-  group: infra-${{ github.ref }}
+  group: infra-${{ github.ref }} # shared with Infra Build so they queue, not race
   cancel-in-progress: false
 
 permissions:
   contents: read
-  id-token: write # required for Workload Identity Federation (keyless auth)
+  id-token: write
 
 env:
   TOFU_VERSION: 1.12.4
@@ -39,7 +29,7 @@ jobs:
   destroy:
     name: Tofu Destroy
     runs-on: ubuntu-latest
-    environment: production # REQUIRED REVIEWERS here => manual approval gate
+    environment: production
     defaults:
       run:
         working-directory: terraform
@@ -48,9 +38,7 @@ jobs:
       TF_VAR_state_bucket: ${{ vars.TF_STATE_BUCKET }}
 
     steps:
-      # Inputs go through env, never directly into the script body. Interpolating
-      # ${{ github.event.inputs.* }} straight into `run:` lets anyone who can
-      # dispatch the workflow inject shell.
+      # Inputs via env, never interpolated into the script body (shell injection).
       - name: Verify confirmation
         env:
           CONFIRM: ${{ github.event.inputs.confirm }}
@@ -62,10 +50,9 @@ jobs:
             exit 1
           fi
           if [ "$TYPED_PROJECT" != "$REAL_PROJECT" ]; then
-            echo "::error::Project ID does not match the configured target project. Refusing to destroy."
+            echo "::error::Project ID does not match the configured target project."
             exit 1
           fi
-          echo "Confirmed teardown of project $REAL_PROJECT"
 
       - name: Checkout
         uses: actions/checkout@v5
@@ -84,26 +71,16 @@ jobs:
           tofu_wrapper: false
 
       - name: Tofu Init
-        # No -backend-config: bucket comes from TF_VAR_state_bucket via early
-        # variable evaluation.
         run: tofu init -input=false
 
-      # A destroy is the single most destructive operation in this repo and the
-      # state is what makes the resources recoverable/importable afterwards.
-      # Snapshot it to a timestamped object BEFORE touching anything.
       - name: Back up state before destroy
         run: |
           STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
           DEST="gs://${TF_VAR_state_bucket}/model-llmsecops/state-backups/pre-destroy-${STAMP}.json"
           tofu state pull > /tmp/state-backup.json
-          echo "state serial: $(python3 -c 'import json;print(json.load(open("/tmp/state-backup.json"))["serial"])')"
           gcloud storage cp /tmp/state-backup.json "$DEST"
-          echo "Backed up to $DEST"
           echo "STATE_BACKUP=$DEST" >> "$GITHUB_ENV"
 
-      # Plan the destroy first, so what gets torn down is recorded in the run
-      # log and is exactly what the apply step executes. `destroy -auto-approve`
-      # in one shot leaves no record of what was removed.
       - name: Plan destroy
         run: |
           tofu plan -destroy -input=false -out=tfplan-destroy
@@ -129,11 +106,4 @@ jobs:
           retention-days: 7
 
       - name: Tofu Destroy
-        # Applies the SAVED destroy plan — what was printed above is what runs.
         run: tofu apply -input=false -auto-approve tfplan-destroy
-
-      - name: Confirm teardown
-        if: always()
-        run: |
-          echo "Remaining resources in state: $(tofu state list | wc -l)"
-          tofu state list || true

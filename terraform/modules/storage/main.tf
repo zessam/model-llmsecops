@@ -24,9 +24,20 @@ resource "google_service_account" "app" {
   display_name = "vLLM / app workload identity SA"
 }
 
-resource "google_storage_bucket_iam_member" "app_model_reader" {
+# WRITE, not read-only. vLLM downloads the model from HF Hub into this bucket
+# through the gcsfuse mount on first start, so the workload has to be able to
+# create objects — objectViewer would fail the download with a 403.
+#
+# objectUser (not objectAdmin) is the narrower of the two write roles: it grants
+# object create/read/update/delete but no control over bucket-level IAM.
+#
+# Trade-off worth being aware of: the serving pod can now overwrite or delete
+# the weights it loads. If you later pre-populate the bucket instead of
+# downloading at runtime, drop this back to roles/storage.objectViewer and
+# make the volume mount readOnly again.
+resource "google_storage_bucket_iam_member" "app_model_writer" {
   bucket = google_storage_bucket.models.name
-  role   = "roles/storage.objectViewer"
+  role   = "roles/storage.objectUser"
   member = "serviceAccount:${google_service_account.app.email}"
 }
 
