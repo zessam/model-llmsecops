@@ -22,7 +22,7 @@ spec:
               ROUTER=http://vllm-router-service.default.svc.cluster.local:80/v1/completions
               # CPU inference is slow: keep --limit tiny and cap generation length.
               lm_eval --model local-completions \
-                --model_args "base_url=${ROUTER},model=Qwen/Qwen2.5-0.5B-Instruct,num_concurrent=4,tokenized_requests=False,max_gen_toks=256" \
+                --model_args "base_url=${ROUTER},model=HuggingFaceTB/SmolLM2-135M-Instruct,num_concurrent=4,tokenized_requests=False,max_gen_toks=256" \
                 --tasks gsm8k \
                 --limit 5 \
                 --output_path /tmp/lmeval
@@ -30,14 +30,23 @@ spec:
               import json, glob, urllib.request
               f = sorted(glob.glob('/tmp/lmeval/**/results*.json', recursive=True))[-1]
               results = json.load(open(f))['results']
-              lines = ["# TYPE lm_eval_score gauge"]
+              # Keys look like "exact_match,strict-match" — metric,filter. The
+              # filter MUST stay in the labels: gsm8k reports exact_match under
+              # both strict-match and flexible-extract, so dropping it pushes two
+              # identical series and the Pushgateway rejects the whole body with
+              # a 400.
+              lines, seen = ["# TYPE lm_eval_score gauge"], set()
               for task, metrics in results.items():
                   for key, val in metrics.items():
                       if isinstance(val, (int, float)) and 'stderr' not in key and ',' in key:
-                          metric = key.split(',')[0]
-                          lines.append(f'lm_eval_score{{task="{task}",metric="{metric}"}} {val}')
+                          metric, _, flt = key.partition(',')
+                          labels = f'task="{task}",metric="{metric}",filter="{flt}"'
+                          if labels in seen:
+                              continue
+                          seen.add(labels)
+                          lines.append(f'lm_eval_score{{{labels}}} {val}')
               body = "\n".join(lines) + "\n"
-              url = "http://pushgateway.monitoring.svc.cluster.local:9091/metrics/job/lm_eval/model/qwen2_5_0_5b"
+              url = "http://pushgateway.monitoring.svc.cluster.local:9091/metrics/job/lm_eval/model/smollm2_135m"
               req = urllib.request.Request(url, data=body.encode(), method='POST')
               print("pushgateway status:", urllib.request.urlopen(req).status)
               print(body)

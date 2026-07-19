@@ -56,7 +56,7 @@ User `admin`. Open `http://<EXTERNAL-IP>` → dashboard **LLM Quality & Performa
 - `values-cpu.yaml` must set `serviceMonitor.enabled: true` on **both**
   `servingEngineSpec` and `routerSpec`. The chart defaults them to `false`, and
   without them Prometheus scrapes no vLLM metrics at all.
-- The eval Jobs target `Qwen/Qwen2.5-0.5B-Instruct`. If the model changes in
+- The eval Jobs target `HuggingFaceTB/SmolLM2-135M-Instruct`. If the model changes in
   `values-cpu.yaml`, update `lm-eval-job.yaml` too or lm-eval gets a 404.
 - Jobs are immutable — `kubectl delete job` before re-applying.
 - `--limit 5` on lm-eval is deliberate. CPU inference is slow; a full gsm8k run

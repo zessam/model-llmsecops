@@ -18,7 +18,14 @@ spec:
           args:
             - |
               set -e
-              pip install --quiet guidellm
+              # CPU-only torch FIRST. guidellm pulls torch transitively and pip
+              # otherwise resolves the CUDA build — 4.7GB of site-packages and
+              # ~20 min of silent install on this node.
+              pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
+              # tracerite 2.6.0 dropped html.style, which sanic (a guidellm
+              # dependency) imports at module load — guidellm fails to import at
+              # all without this pin. 2.5.2 is the newest working version.
+              pip install --quiet guidellm "tracerite<2.6"
               guidellm run \
                 --backend "kind=openai_http,target=http://vllm-router-service.default.svc.cluster.local:80" \
                 --profile "kind=constant,rate=1" \
@@ -62,7 +69,7 @@ spec:
                       break
 
               body = "\n".join(lines) + "\n"
-              url = "http://pushgateway.monitoring.svc.cluster.local:9091/metrics/job/guidellm/model/qwen2_5_0_5b"
+              url = "http://pushgateway.monitoring.svc.cluster.local:9091/metrics/job/guidellm/model/smollm2_135m"
               req = urllib.request.Request(url, data=body.encode(), method="POST")
               print("pushgateway status:", urllib.request.urlopen(req).status, "series:", seen)
               print(body)

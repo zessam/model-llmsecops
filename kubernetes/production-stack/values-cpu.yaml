@@ -13,13 +13,13 @@ servingEngineSpec:
     failureThreshold: 90 # ~15 min for download + CPU warmup
 
   modelSpec:
-    - name: "qwen05b"
+    - name: "smollm135m"
       enabled: true
 
       repository: "vllm/vllm-openai-cpu"
       tag: "latest"
 
-      modelURL: "Qwen/Qwen2.5-0.5B-Instruct"
+      modelURL: "HuggingFaceTB/SmolLM2-135M-Instruct"
       replicaCount: 1
 
       serviceAccountName: "model-llmsecops-sa"
