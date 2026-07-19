@@ -1,0 +1,57 @@
+# promptfoo self-hosted server — the RESULTS UI, not the scanner.
+#   helm upgrade --install promptfoo ./helm/chart/promptfoo -n promptfoo -f values.yaml
+#
+# The chart lives in the promptfoo git repo (./helm/chart/promptfoo), not on a
+# chart repo — the workflow clones it at a pinned tag. Upstream calls Helm
+# support experimental, so this holds the viewer only; the pipeline's pass/fail
+# comes from the scan Job, which does not depend on this server being up.
+
+replicaCount: 1 # server is SQLite + an in-memory job queue; >1 replica corrupts both
+
+image:
+  repository: ghcr.io/promptfoo/promptfoo
+  # Bump deliberately: the SQLite schema migrates forward on start, so rolling
+  # back after an upgrade needs the PVC restored from snapshot.
+  tag: "0.109.1"
+  pullPolicy: IfNotPresent
+
+# Chart default is [{name: <yourcred>}] — a literal placeholder that makes the
+# Deployment reference a Secret that does not exist. ghcr is public; clear it.
+imagePullSecrets: []
+
+service:
+  # DELIBERATE: public, unauthenticated — same posture as the vLLM router
+  # (production-stack/values-cpu.yaml:77). promptfoo self-hosted has no built-in
+  # auth or SSO, so anyone with the IP can read scan results, i.e. the list of
+  # attacks that currently work against the model. Accepted for the assessment
+  # phase; see README "Access decision" before this model carries real traffic.
+  type: LoadBalancer
+  port: 3000
+
+persistentVolumesClaims: # sic — the chart misspells this key; "persistentVolumeClaims" is silently ignored
+  - name: promptfoo
+    size: 10Gi # 1Gi default fills fast; each redteam eval stores every probe + response
+    accessModes:
+      - ReadWriteOnce
+    storageClassName: standard-rwo # GKE; the chart's "default" is not a StorageClass here
+
+volumes:
+  - name: config
+    persistentVolumeClaim:
+      claimName: promptfoo
+volumeMounts:
+  - name: config
+    mountPath: "/home/promptfoo/.promptfoo" # SQLite db lives here
+    readOnly: false
+
+resources:
+  requests:
+    cpu: "100m"
+    memory: "512Mi" # chart's 128Mi limit OOM-kills Node once results accumulate
+  limits:
+    memory: "1Gi"
+
+# Default pool. No toleration for dedicated=vllm — this must not land on the
+# inference nodes and compete with the serving engine for CPU.
+nodeSelector:
+  kubernetes.io/arch: amd64
