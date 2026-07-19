@@ -6,6 +6,9 @@ servingEngineSpec:
   containerPort: 8000
   servicePort: 80
 
+  serviceMonitor:
+    enabled: true # chart default is false; without it Prometheus scrapes nothing
+
   startupProbe:
     failureThreshold: 90 # ~15 min for download + CPU warmup
 
@@ -72,6 +75,8 @@ servingEngineSpec:
 routerSpec:
   replicaCount: 1
   serviceType: LoadBalancer # public, unauthenticated, not behind Cloud Armor
+  serviceMonitor:
+    enabled: true
   routingLogic: "roundrobin"
   engineScrapeInterval: 15
   requestStatsWindow: 60
