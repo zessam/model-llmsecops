@@ -121,12 +121,12 @@ run "bucket_is_private" {
     error_message = "Model bucket must use uniform bucket-level access (no legacy ACLs)."
   }
 
-  # Read-only. The pods pull model weights; nothing in the app should be able
-  # to overwrite them, which is what makes objectViewer rather than objectAdmin
-  # the load-bearing choice here.
+  # The app SA writes the model cache into the bucket, so it needs object write.
+  # objectUser is the ceiling: it covers objects but grants no bucket-level IAM
+  # control, unlike objectAdmin or storage.admin.
   assert {
-    condition     = google_storage_bucket_iam_member.app_model_reader.role == "roles/storage.objectViewer"
-    error_message = "App SA must have read-only access to the model bucket."
+    condition     = google_storage_bucket_iam_member.app_model_writer.role == "roles/storage.objectUser"
+    error_message = "App SA must hold exactly roles/storage.objectUser on the model bucket — not an admin role, which would let the serving pod alter bucket IAM or delete the bucket."
   }
 }
 
