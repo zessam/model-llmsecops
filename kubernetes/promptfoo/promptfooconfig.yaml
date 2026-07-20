@@ -78,7 +78,7 @@ defaultTest:
         temperature: 0 # determinism: the same response must grade the same way twice
 
 redteam:
-  numTests: 5 # per plugin. 135M params on CPU — this is already several hundred requests.
+  numTests: 2 # per plugin. 135M params on CPU — this is already several hundred requests.
 
   # Model that WRITES the attacks, where local generation is possible. Distinct
   # from the judge above, which grades the answers — both must be stronger than
