@@ -63,7 +63,9 @@ def ask(query):
         return json.load(r)["choices"][0]["message"]["content"]
 
 
-inf = load_LLMmap(MODEL_DIR)
+# load_LLMmap returns (conf, inference_model) — the conf is already reachable
+# as inf.conf, so only the second half is worth binding.
+_, inf = load_LLMmap(MODEL_DIR)
 
 answers = []
 for i, q in enumerate(inf.queries, 1):
