@@ -15,7 +15,7 @@ targets:
   - id: http
     label: vllm-router
     config:
-      url: http://104.197.7.198/v1/chat/completions
+      url: http://136.116.192.130/v1/chat/completions
       method: POST
       headers:
         Content-Type: application/json

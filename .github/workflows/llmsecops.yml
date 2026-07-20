@@ -156,8 +156,10 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
+          # No `cache: pip` — it hashes a dependency file in the checked-out
+          # repo, and we have none. LLMmap's requirements.txt arrives later,
+          # in the clone at /tmp/llmmap.
           python-version: "3.11" # LLMmap's stated requirement
-          cache: pip
 
       # LLMmap embeds responses with intfloat/multilingual-e5-large-instruct —
       # ~2.2GB pulled from HuggingFace on every cold run. Static weights, so the
