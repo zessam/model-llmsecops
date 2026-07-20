@@ -123,5 +123,20 @@ jobs:
             echo "::error::Scan produced no results.json — see the eval output above."
             exit 1; }
 
-          pf share --yes < /dev/null
+          # Log out BEFORE sharing. While logged in, the CLI targets the cloud
+          # org and silently ignores PROMPTFOO_REMOTE_* — results land there
+          # instead of our server, while still printing our URL. `share` has no
+          # --host flag, so dropping the cloud session is the only lever.
+          # The login was only ever needed to get eval past the red team gate.
+          pf auth logout >/dev/null 2>&1 || true
+
+          pf share < /dev/null
+
+          # Confirm the eval actually reached OUR server. Printing a URL proves
+          # nothing — that is exactly how the cloud redirect went unnoticed.
+          sleep 5
+          if curl -fsS --max-time 30 "$UI_URL/api/results" | grep -q '"data":\[\]'; then
+            echo "::error::Upload did not reach $UI_URL — its eval list is still empty."
+            exit 1
+          fi
           echo "Results: $UI_URL" >> "$GITHUB_STEP_SUMMARY"
