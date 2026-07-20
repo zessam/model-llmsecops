@@ -2,7 +2,7 @@ name: LLMSecOps
 
 # Runs the promptfoo red team scan and uploads the report to the UI.
 #
-# Change WHAT is tested   -> kubernetes/promptfoo/promptfooconfig.yaml, then
+# Change WHAT is tested   -> security/promptfoo/promptfooconfig.yaml, then
 #                            regenerate generated/redteam.yaml and commit it
 # Change the target       -> the `url` in that same file
 # Change WHERE results go -> UI_URL below
@@ -64,7 +64,7 @@ jobs:
           fi
 
       - name: Scan and upload
-        working-directory: kubernetes/promptfoo
+        working-directory: security/promptfoo
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           PROMPTFOO_API_KEY: ${{ secrets.PROMPTFOO_API_KEY }}
@@ -140,3 +140,39 @@ jobs:
             exit 1
           fi
           echo "Results: $UI_URL" >> "$GITHUB_STEP_SUMMARY"
+
+  # LLMmap — model fingerprinting. Asks 8 probe questions and matches the answer
+  # signature against 52 known models. Independent of the promptfoo job: a
+  # fingerprint result does not depend on a scan and vice versa.
+  llmmap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11" # LLMmap's stated requirement
+          cache: pip
+
+      - name: Install LLMmap
+        run: |
+          set -e
+          git clone --depth 1 https://github.com/pasquini-dario/LLMmap.git /tmp/llmmap
+          # CPU torch first, or pip pulls the ~2GB CUDA build for nothing.
+          pip install --quiet torch==2.7.1 --index-url https://download.pytorch.org/whl/cpu
+          pip install --quiet -r /tmp/llmmap/requirements.txt
+
+      - name: Fingerprint the model
+        working-directory: /tmp/llmmap
+        env:
+          TARGET_URL: http://104.197.7.198/v1/chat/completions
+          TARGET_MODEL: HuggingFaceTB/SmolLM2-135M-Instruct
+          OUT: ${{ github.workspace }}/llmmap-results.json
+        run: python "$GITHUB_WORKSPACE/security/llmmap/fingerprint.py"
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: llmmap-results
+          path: llmmap-results.json
+          if-no-files-found: warn

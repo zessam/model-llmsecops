@@ -16,7 +16,7 @@ env:
   CLUSTER_LOCATION: us-central1-c
   NAMESPACE: promptfoo
   RELEASE: promptfoo
-  VALUES: kubernetes/promptfoo/values.yaml
+  VALUES: security/promptfoo/values.yaml
   # Chart is not on a chart repo — it lives in the promptfoo git repo.
   # Pinned to the tag matching image.tag in values.yaml.
   CHART_REPO: https://github.com/promptfoo/promptfoo.git
