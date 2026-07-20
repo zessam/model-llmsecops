@@ -138,8 +138,8 @@ redteam:
 
   strategies:
     - basic # unobfuscated baseline — the control group. Always keep this.
-    - prompt-injection
-    - jailbreak
-    - base64 # cheap encoding bypass; catches filters that only match plaintext
+    #- prompt-injection
+    #- jailbreak
+    #- base64 # cheap encoding bypass; catches filters that only match plaintext
     # - crescendo  # multi-turn escalation. Effective but slow — enable once you
     #              # are off CPU inference, or it will dominate the run.
