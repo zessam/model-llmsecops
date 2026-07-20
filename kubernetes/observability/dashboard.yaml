@@ -1,5 +1,14 @@
 # Grafana dashboard for LLM quality + performance. The kube-prometheus-stack
 # sidecar auto-loads any ConfigMap carrying the grafana_dashboard="1" label.
+#
+# Three sections, three different questions:
+#   Quality (lm-eval)   — is the model RIGHT?     pushed scores, changes per eval run
+#   Performance (GuideLLM) — how FAST under load? pushed summary of a 60s benchmark
+#   Live serving (vLLM) — what is happening NOW?  scraped continuously
+#
+# Every panel carries a `description`, which Grafana renders as an (i) tooltip in
+# the panel header. Keep them accurate — they are the only explanation a reader
+# gets, and a stale one is worse than none.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -18,13 +27,44 @@ data:
       "panels": [
         {
           "type": "row",
-          "title": "Quality (lm-eval)",
+          "title": "Quality (lm-eval) — is the model right?",
           "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
         },
         {
           "type": "stat",
-          "title": "lm-eval scores",
-          "gridPos": { "h": 6, "w": 12, "x": 0, "y": 1 },
+          "title": "gsm8k accuracy (latest run)",
+          "description": "Fraction of gsm8k grade-school math problems the model answered correctly, from the most recent lm-eval Job.\n\nTwo scorers on the SAME answers: strict-match needs the exact expected format; flexible-extract digs a number out of surrounding prose. flexible >= strict always. A big gap means the model knows the answer but formats it badly.\n\nNOT a real quality measure: lm-eval-job.yaml runs --limit 5, so this is 5 questions and each one moves the score by 0.2. Treat it as proof the eval pipeline works.",
+          "gridPos": { "h": 6, "w": 7, "x": 0, "y": 1 },
+          "targets": [
+            {
+              "expr": "lm_eval_score",
+              "legendFormat": "{{metric}} ({{filter}})",
+              "instant": true,
+              "refId": "A"
+            }
+          ],
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value_and_name",
+            "colorMode": "value",
+            "graphMode": "none"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "min": 0,
+              "max": 1,
+              "decimals": 3,
+              "unit": "percentunit",
+              "color": { "mode": "fixed", "fixedColor": "blue" }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Accuracy across eval runs",
+          "description": "The same scores over time. Each step is one lm-eval Job run — flat lines between runs mean nothing changed, not that the model was re-tested.\n\nUse this to catch regressions after a model or serving-config change. With --limit 5 the resolution is 0.2, so only large moves are real signal.",
+          "gridPos": { "h": 6, "w": 11, "x": 7, "y": 1 },
           "targets": [
             {
               "expr": "lm_eval_score",
@@ -33,68 +73,281 @@ data:
             }
           ],
           "fieldConfig": {
-            "defaults": { "min": 0, "max": 1, "decimals": 3 },
+            "defaults": {
+              "min": 0,
+              "max": 1,
+              "unit": "percentunit",
+              "custom": { "lineWidth": 2, "pointSize": 6, "showPoints": "always", "spanNulls": true }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "text",
+          "title": "How to read this section",
+          "gridPos": { "h": 6, "w": 6, "x": 18, "y": 1 },
+          "options": {
+            "mode": "markdown",
+            "content": "**Source:** `lm-eval-job.yaml` → Pushgateway → Prometheus.\n\n**Metric:** `lm_eval_score{task,metric,filter}`\n\nThese values only change when you re-run the Job:\n\n```\nkubectl delete job lm-eval-gsm8k\nkubectl apply -f lm-eval-job.yaml\n```\n\nJobs are immutable — the delete is required.\n\n⚠️ `--limit 5` is deliberate. Full gsm8k on CPU takes hours. **Do not read these numbers as the model's real accuracy.**"
+          }
+        },
+        {
+          "type": "row",
+          "title": "Performance (GuideLLM benchmark) — how fast under controlled load?",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 7 }
+        },
+        {
+          "type": "stat",
+          "title": "Time to first token (mean)",
+          "description": "How long a user waits after sending a prompt before the FIRST token comes back — the latency that feels like 'is it broken?'.\n\nCovers queue wait + prefill of the 64-token prompt. On CPU with --enforce-eager this is seconds, not the tens of milliseconds a GPU deployment would show.",
+          "gridPos": { "h": 5, "w": 6, "x": 0, "y": 8 },
+          "targets": [
+            { "expr": "guidellm_metric{metric=\"time_to_first_output_token_ms\",stat=\"mean\"}", "instant": true, "refId": "A" }
+          ],
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value",
+            "colorMode": "value",
+            "graphMode": "none"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms",
+              "decimals": 0,
+              "color": { "mode": "fixed", "fixedColor": "orange" }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "stat",
+          "title": "Inter-token latency (mean)",
+          "description": "Average gap between consecutive generated tokens once streaming has started — the perceived 'typing speed'.\n\nThis is the decode-loop cost. On CPU it dominates total request time: 64 output tokens at this gap is most of the end-to-end latency.",
+          "gridPos": { "h": 5, "w": 6, "x": 6, "y": 8 },
+          "targets": [
+            { "expr": "guidellm_metric{metric=\"inter_token_latency_ms\",stat=\"mean\"}", "instant": true, "refId": "A" }
+          ],
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value",
+            "colorMode": "value",
+            "graphMode": "none"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms",
+              "decimals": 0,
+              "color": { "mode": "fixed", "fixedColor": "yellow" }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "stat",
+          "title": "Output throughput (mean)",
+          "description": "Generated tokens per second across ALL concurrent requests during the benchmark — the server-side capacity number.\n\nDivide by the concurrency shown to the right to get per-request speed. Aggregate throughput can look healthy while every individual user is slow.",
+          "gridPos": { "h": 5, "w": 6, "x": 12, "y": 8 },
+          "targets": [
+            { "expr": "guidellm_metric{metric=\"output_tokens_per_second\",stat=\"mean\"}", "instant": true, "refId": "A" }
+          ],
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value",
+            "colorMode": "value",
+            "graphMode": "none"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "decimals": 1,
+              "unit": "none",
+              "color": { "mode": "fixed", "fixedColor": "green" }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "stat",
+          "title": "Concurrency reached (mean)",
+          "description": "Average number of requests in flight simultaneously during the run.\n\nThe benchmark OFFERS a constant 1 request/sec. If concurrency climbs well above 1, the server is not keeping up — arrivals are outpacing completions and requests are stacking in the queue. That is the clearest single sign of CPU saturation.",
+          "gridPos": { "h": 5, "w": 6, "x": 18, "y": 8 },
+          "targets": [
+            { "expr": "guidellm_metric{metric=\"request_concurrency\",stat=\"mean\"}", "instant": true, "refId": "A" }
+          ],
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value",
+            "colorMode": "value",
+            "graphMode": "none"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "decimals": 1,
+              "unit": "none",
+              "color": { "mode": "fixed", "fixedColor": "red" }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "bargauge",
+          "title": "End-to-end request latency — percentile spread",
+          "description": "Full request duration (send → last token), split by percentile.\n\nRead the SHAPE, not just p50: if p99 is far above p50 the service is inconsistent and your worst users are much worse off than the median suggests. A flat profile means predictable latency. Averages hide exactly this.",
+          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 13 },
+          "targets": [
+            { "expr": "guidellm_metric{metric=\"request_latency\",stat=\"p50\"}", "legendFormat": "p50 (median)", "instant": true, "refId": "A" },
+            { "expr": "guidellm_metric{metric=\"request_latency\",stat=\"p95\"}", "legendFormat": "p95", "instant": true, "refId": "B" },
+            { "expr": "guidellm_metric{metric=\"request_latency\",stat=\"p99\"}", "legendFormat": "p99 (worst case)", "instant": true, "refId": "C" },
+            { "expr": "guidellm_metric{metric=\"request_latency\",stat=\"max\"}", "legendFormat": "max", "instant": true, "refId": "D" }
+          ],
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "displayMode": "gradient",
+            "orientation": "horizontal"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "decimals": 1,
+              "min": 0,
+              "color": { "mode": "continuous-GrYlRd" }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "bargauge",
+          "title": "Time to first token — percentile spread",
+          "description": "Same percentile view for the initial wait.\n\nA long TTFT tail usually means queueing, not slow compute: requests are sitting behind others before prefill even starts. Cross-check against 'Requests waiting' in the live section — if that is non-zero during the run, queueing is confirmed.",
+          "gridPos": { "h": 8, "w": 8, "x": 8, "y": 13 },
+          "targets": [
+            { "expr": "guidellm_metric{metric=\"time_to_first_output_token_ms\",stat=\"p50\"}", "legendFormat": "p50 (median)", "instant": true, "refId": "A" },
+            { "expr": "guidellm_metric{metric=\"time_to_first_output_token_ms\",stat=\"p95\"}", "legendFormat": "p95", "instant": true, "refId": "B" },
+            { "expr": "guidellm_metric{metric=\"time_to_first_output_token_ms\",stat=\"p99\"}", "legendFormat": "p99 (worst case)", "instant": true, "refId": "C" },
+            { "expr": "guidellm_metric{metric=\"time_to_first_output_token_ms\",stat=\"max\"}", "legendFormat": "max", "instant": true, "refId": "D" }
+          ],
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "displayMode": "gradient",
+            "orientation": "horizontal"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms",
+              "decimals": 0,
+              "min": 0,
+              "color": { "mode": "continuous-GrYlRd" }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "text",
+          "title": "What this benchmark actually did",
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 13 },
+          "options": {
+            "mode": "markdown",
+            "content": "**Source:** `guidellm-job.yaml` → Pushgateway.\n\nA **60-second** run against the router:\n\n| Setting | Value |\n|---|---|\n| Arrival rate | constant, **1 req/s** |\n| Prompt | 64 synthetic tokens |\n| Output | 64 tokens |\n\nOnly the **`successful`** bucket is pushed — errored and incomplete requests are dropped by the push script, so these numbers describe requests that *worked*.\n\nValues are a **frozen snapshot**, not a live feed. Re-run:\n\n```\nkubectl delete job guidellm-benchmark\nkubectl apply -f guidellm-job.yaml\n```"
+          }
+        },
+        {
+          "type": "table",
+          "title": "All GuideLLM metrics — full statistical breakdown",
+          "description": "Every metric GuideLLM reported, as rows; every statistic as columns. This is the raw evidence behind the tiles above.\n\nMixed units by row: *_ms in milliseconds, request_latency in seconds, *_count are token counts, *_per_second are rates. Because units differ per row, no unit is applied — read the metric name.\n\nUse it to find things the summary tiles omit, e.g. time_per_output_token_ms or prompt_tokens_per_second.",
+          "gridPos": { "h": 10, "w": 24, "x": 0, "y": 21 },
+          "targets": [
+            {
+              "expr": "guidellm_metric",
+              "format": "table",
+              "instant": true,
+              "refId": "A"
+            }
+          ],
+          "transformations": [
+            {
+              "id": "groupingToMatrix",
+              "options": {
+                "columnField": "stat",
+                "rowField": "metric",
+                "valueField": "Value"
+              }
+            }
+          ],
+          "options": {
+            "showHeader": true,
+            "footer": { "show": false, "reducer": ["sum"], "countRows": false, "fields": "" }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "decimals": 2,
+              "custom": { "align": "right", "filterable": true }
+            },
+            "overrides": [
+              {
+                "matcher": { "id": "byName", "options": "metric\\stat" },
+                "properties": [
+                  { "id": "custom.align", "value": "left" },
+                  { "id": "custom.width", "value": 300 },
+                  { "id": "displayName", "value": "Metric" }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "row",
+          "title": "Live serving (vLLM engine) — what is happening right now?",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 }
+        },
+        {
+          "type": "text",
+          "title": "How this section differs from the two above",
+          "gridPos": { "h": 3, "w": 24, "x": 0, "y": 32 },
+          "options": {
+            "mode": "markdown",
+            "content": "Everything below is **scraped continuously** from the vLLM engine and router via ServiceMonitors — it moves in real time, unlike the two pushed-snapshot sections above. If these panels are empty, either no traffic is hitting the model, or `serviceMonitor.enabled` is false on `servingEngineSpec`/`routerSpec` in `values-cpu.yaml` (the chart defaults it to `false`, and the deploy workflow force-disables it when the Prometheus Operator CRDs are missing). **Run the GuideLLM Job and watch these panels live** — that is the same load, seen from the server's side."
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Requests running vs waiting",
+          "description": "running = actively being decoded by the engine. waiting = queued, not yet started.\n\nThe key panel for saturation. waiting persistently above 0 means demand exceeds capacity: every queued request's TTFT grows by however long it sits here. With one CPU replica this fills quickly — that is the constraint, not a bug.",
+          "gridPos": { "h": 7, "w": 12, "x": 0, "y": 35 },
+          "targets": [
+            { "expr": "vllm:num_requests_running", "legendFormat": "running", "refId": "A" },
+            { "expr": "vllm:num_requests_waiting", "legendFormat": "waiting (queued)", "refId": "B" }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "min": 0,
+              "unit": "none",
+              "custom": { "lineWidth": 2, "fillOpacity": 15, "showPoints": "never" }
+            },
             "overrides": []
           }
         },
         {
           "type": "timeseries",
-          "title": "lm-eval score over time",
-          "gridPos": { "h": 6, "w": 12, "x": 12, "y": 1 },
+          "title": "Token throughput",
+          "description": "Tokens per second flowing through the engine, split by direction.\n\ngeneration = tokens the model produced (decode, one at a time — the expensive path).\nprompt = tokens ingested (prefill, processed in parallel — usually a tall thin spike at request start).\n\nSustained generation throughput is the real capacity ceiling of this deployment.",
+          "gridPos": { "h": 7, "w": 12, "x": 12, "y": 35 },
           "targets": [
-            {
-              "expr": "lm_eval_score",
-              "legendFormat": "{{task}} / {{metric}} ({{filter}})",
-              "refId": "A"
-            }
-          ]
-        },
-        {
-          "type": "row",
-          "title": "Performance (GuideLLM benchmark)",
-          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 7 }
-        },
-        {
-          "type": "table",
-          "title": "GuideLLM report",
-          "gridPos": { "h": 9, "w": 24, "x": 0, "y": 8 },
-          "targets": [
-            {
-              "expr": "guidellm_metric",
-              "legendFormat": "{{metric}} {{stat}}",
-              "format": "table",
-              "instant": true,
-              "refId": "A"
-            }
-          ]
-        },
-        {
-          "type": "row",
-          "title": "Live serving (vLLM engine)",
-          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 17 }
+            { "expr": "rate(vllm:generation_tokens_total[5m])", "legendFormat": "generation (output)", "refId": "A" },
+            { "expr": "rate(vllm:prompt_tokens_total[5m])", "legendFormat": "prompt (input)", "refId": "B" }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "min": 0,
+              "unit": "none",
+              "custom": { "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" }
+            },
+            "overrides": []
+          }
         },
         {
           "type": "timeseries",
-          "title": "Requests running / waiting",
-          "gridPos": { "h": 7, "w": 12, "x": 0, "y": 18 },
-          "targets": [
-            { "expr": "vllm:num_requests_running", "legendFormat": "running", "refId": "A" },
-            { "expr": "vllm:num_requests_waiting", "legendFormat": "waiting", "refId": "B" }
-          ]
-        },
-        {
-          "type": "timeseries",
-          "title": "Token throughput (tokens/s)",
-          "gridPos": { "h": 7, "w": 12, "x": 12, "y": 18 },
-          "targets": [
-            { "expr": "rate(vllm:generation_tokens_total[5m])", "legendFormat": "generation", "refId": "A" },
-            { "expr": "rate(vllm:prompt_tokens_total[5m])", "legendFormat": "prompt", "refId": "B" }
-          ]
-        },
-        {
-          "type": "timeseries",
-          "title": "Time to first token (p50/p95)",
-          "gridPos": { "h": 7, "w": 12, "x": 0, "y": 25 },
+          "title": "Time to first token (p50 / p95)",
+          "description": "Live TTFT distribution, computed from the engine's histogram buckets.\n\nThe live equivalent of the GuideLLM TTFT panel — use it to confirm the benchmark's numbers reflect normal operation rather than a one-off. p95 pulling away from p50 signals queueing under bursty load.",
+          "gridPos": { "h": 7, "w": 12, "x": 0, "y": 42 },
           "targets": [
             {
               "expr": "histogram_quantile(0.5, sum(rate(vllm:time_to_first_token_seconds_bucket[5m])) by (le))",
@@ -105,12 +358,20 @@ data:
               "legendFormat": "p95", "refId": "B"
             }
           ],
-          "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "min": 0,
+              "custom": { "lineWidth": 2, "showPoints": "never" }
+            },
+            "overrides": []
+          }
         },
         {
           "type": "timeseries",
-          "title": "End-to-end request latency (p50/p95)",
-          "gridPos": { "h": 7, "w": 12, "x": 12, "y": 25 },
+          "title": "End-to-end request latency (p50 / p95)",
+          "description": "Total time per request, prompt received → final token sent.\n\nRoughly TTFT + (output tokens x inter-token latency), so it scales with response length: a request asking for 500 tokens will sit far above one asking for 64. Compare against the GuideLLM panel above, which fixed output at 64 tokens.",
+          "gridPos": { "h": 7, "w": 12, "x": 12, "y": 42 },
           "targets": [
             {
               "expr": "histogram_quantile(0.5, sum(rate(vllm:e2e_request_latency_seconds_bucket[5m])) by (le))",
@@ -121,7 +382,58 @@ data:
               "legendFormat": "p95", "refId": "B"
             }
           ],
-          "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "min": 0,
+              "custom": { "lineWidth": 2, "showPoints": "never" }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "KV cache utilisation",
+          "description": "How much of the KV-cache pool is in use. The pool is capped by VLLM_CPU_KVCACHE_SPACE=2 (GiB) in values-cpu.yaml.\n\nApproaching 100% is the trigger for preemption: vLLM evicts an in-flight request to free space and re-runs it later, which shows up as a latency spike with no matching rise in traffic. If this saturates, raise the KV cache space or lower --max-num-seqs (currently 16).",
+          "gridPos": { "h": 6, "w": 12, "x": 0, "y": 49 },
+          "targets": [
+            { "expr": "vllm:kv_cache_usage_perc", "legendFormat": "KV cache in use", "refId": "A" }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "max": 1,
+              "custom": { "lineWidth": 2, "fillOpacity": 15, "showPoints": "never" },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "orange", "value": 0.8 },
+                  { "color": "red", "value": 0.95 }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Request outcomes",
+          "description": "Completed requests per second, broken down by finish_reason.\n\n'length' means the response was truncated at the token cap rather than finishing naturally — expected for benchmark traffic that fixes output at 64 tokens, but a warning sign for real usage. Preemptions counts requests the engine evicted and restarted under KV-cache pressure; anything above zero explains latency outliers.",
+          "gridPos": { "h": 6, "w": 12, "x": 12, "y": 49 },
+          "targets": [
+            { "expr": "sum by (finished_reason) (rate(vllm:request_success_total[5m]))", "legendFormat": "finished: {{finished_reason}}", "refId": "A" },
+            { "expr": "rate(vllm:num_preemptions_total[5m])", "legendFormat": "preemptions", "refId": "B" }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "min": 0,
+              "unit": "none",
+              "custom": { "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" }
+            },
+            "overrides": []
+          }
         }
       ]
     }
