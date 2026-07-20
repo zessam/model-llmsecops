@@ -41,12 +41,12 @@ jobs:
           path: ~/.docker-cache
           key: promptfoo-image-${{ env.PROMPTFOO_VERSION }}
 
-      # promptfoo also caches LLM responses, so a re-run does not pay the judge
-      # again for pairs it already graded.
+      # Only the response cache is cached — NOT the home directory, which holds
+      # the promptfoo auth token. Actions caches are not a secret store.
       - name: Cache promptfoo responses
         uses: actions/cache@v4
         with:
-          path: ${{ runner.temp }}/promptfoo
+          path: ${{ runner.temp }}/pfcache
           key: promptfoo-cache-${{ github.run_id }}
           restore-keys: promptfoo-cache-
 
@@ -70,15 +70,18 @@ jobs:
           PROMPTFOO_API_KEY: ${{ secrets.PROMPTFOO_API_KEY }}
         run: |
           set -e
-          mkdir -p "${{ runner.temp }}/promptfoo/cache"
+          mkdir -p "${{ runner.temp }}/pfhome" "${{ runner.temp }}/pfcache"
 
           [ -n "$PROMPTFOO_API_KEY" ] || {
-            echo "::error::PROMPTFOO_API_KEY secret is not set. Redteam graders need it — without it the run stops at an email prompt."
+            echo "::error::PROMPTFOO_API_KEY secret is not set."
+            echo "::error::promptfoo gates red team scans behind an account — OPENROUTER_API_KEY pays for the judge but cannot satisfy this."
+            echo "::error::Use the same key you passed to 'promptfoo auth login --api-key' locally."
             exit 1; }
 
           #  --user     : else files in the mount are owned by the image's uid
-          #  HOME=/pf   : puts the eval database on the mount, so `share` can
-          #               find the eval that `eval` just wrote
+          #  HOME=/pf   : auth token + eval database live here, on a mount shared
+          #               by every pf() call — that is how `share` finds the eval
+          #               `eval` wrote, and how the login below survives
           #  "promptfoo": the image CMD is the server, and its entrypoint runs
           #               `node <arg>` for anything it does not recognise as a
           #               command. Naming the binary is what runs the CLI.
@@ -86,14 +89,23 @@ jobs:
             docker run --rm -i \
               --user "$(id -u):$(id -g)" \
               -v "$PWD:/work" -w /work \
-              -v "${{ runner.temp }}/promptfoo:/pf" \
-              -e HOME=/pf -e PROMPTFOO_CACHE_PATH=/pf/cache \
+              -v "${{ runner.temp }}/pfhome:/pf" \
+              -v "${{ runner.temp }}/pfcache:/cache" \
+              -e HOME=/pf -e PROMPTFOO_CACHE_PATH=/cache \
               -e PROMPTFOO_DISABLE_TELEMETRY=1 \
-              -e OPENROUTER_API_KEY -e PROMPTFOO_API_KEY \
+              -e OPENROUTER_API_KEY \
               -e PROMPTFOO_REMOTE_API_BASE_URL="$UI_URL" \
               -e PROMPTFOO_REMOTE_APP_BASE_URL="$UI_URL" \
               "$IMAGE" promptfoo "$@"
           }
+
+          # Red team scans require a verified promptfoo account. Doing this as a
+          # real login (rather than trusting an env var) mirrors exactly what
+          # works locally, and the token persists on the /pf mount for the calls
+          # below. Output silenced so the key never lands in the log.
+          pf auth login --api-key "$PROMPTFOO_API_KEY" >/dev/null 2>&1 || {
+            echo "::error::promptfoo auth login failed — check the PROMPTFOO_API_KEY secret."
+            exit 1; }
 
           # -c generated/redteam.yaml, NOT promptfooconfig.yaml: the generated
           # file is the complete config (targets + purpose + the 160 test cases).
