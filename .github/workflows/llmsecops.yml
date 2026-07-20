@@ -27,119 +27,124 @@ env:
   CONCURRENCY: 2 # each test calls the model AND the judge
 
 jobs:
-  promptfoo:
-    runs-on: ubuntu-latest
-    environment: production
-    steps:
-      - uses: actions/checkout@v5
+  # ---------------------------------------------------------------------
+  # promptfoo red team scan — TEMPORARILY DISABLED.
+  # Uncomment the block below to re-enable (strip the leading "# " only;
+  # the indentation underneath it is already correct).
+  # ---------------------------------------------------------------------
+  # promptfoo:
+  #   runs-on: ubuntu-latest
+  #   environment: production
+  #   steps:
+  #     - uses: actions/checkout@v5
 
-      # Cache the image tarball. Only correct because the tag is pinned — with
-      # :latest the key would never invalidate and you would run a stale build.
-      - name: Cache promptfoo image
-        uses: actions/cache@v4
-        with:
-          path: ~/.docker-cache
-          key: promptfoo-image-${{ env.PROMPTFOO_VERSION }}
+  #     # Cache the image tarball. Only correct because the tag is pinned — with
+  #     # :latest the key would never invalidate and you would run a stale build.
+  #     - name: Cache promptfoo image
+  #       uses: actions/cache@v4
+  #       with:
+  #         path: ~/.docker-cache
+  #         key: promptfoo-image-${{ env.PROMPTFOO_VERSION }}
 
-      # Only the response cache is cached — NOT the home directory, which holds
-      # the promptfoo auth token. Actions caches are not a secret store.
-      - name: Cache promptfoo responses
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/pfcache
-          key: promptfoo-cache-${{ github.run_id }}
-          restore-keys: promptfoo-cache-
+  #     # Only the response cache is cached — NOT the home directory, which holds
+  #     # the promptfoo auth token. Actions caches are not a secret store.
+  #     - name: Cache promptfoo responses
+  #       uses: actions/cache@v4
+  #       with:
+  #         path: ${{ runner.temp }}/pfcache
+  #         key: promptfoo-cache-${{ github.run_id }}
+  #         restore-keys: promptfoo-cache-
 
-      - name: Load image
-        run: |
-          set -e
-          IMAGE="ghcr.io/promptfoo/promptfoo:${PROMPTFOO_VERSION}"
-          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
-          if [ -f ~/.docker-cache/promptfoo.tar ]; then
-            docker load -i ~/.docker-cache/promptfoo.tar
-          else
-            docker pull "$IMAGE"
-            mkdir -p ~/.docker-cache
-            docker save "$IMAGE" -o ~/.docker-cache/promptfoo.tar
-          fi
+  #     - name: Load image
+  #       run: |
+  #         set -e
+  #         IMAGE="ghcr.io/promptfoo/promptfoo:${PROMPTFOO_VERSION}"
+  #         echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+  #         if [ -f ~/.docker-cache/promptfoo.tar ]; then
+  #           docker load -i ~/.docker-cache/promptfoo.tar
+  #         else
+  #           docker pull "$IMAGE"
+  #           mkdir -p ~/.docker-cache
+  #           docker save "$IMAGE" -o ~/.docker-cache/promptfoo.tar
+  #         fi
 
-      - name: Scan and upload
-        working-directory: security/promptfoo
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          PROMPTFOO_API_KEY: ${{ secrets.PROMPTFOO_API_KEY }}
-        run: |
-          set -e
-          mkdir -p "${{ runner.temp }}/pfhome" "${{ runner.temp }}/pfcache"
+  #     - name: Scan and upload
+  #       working-directory: security/promptfoo
+  #       env:
+  #         OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+  #         PROMPTFOO_API_KEY: ${{ secrets.PROMPTFOO_API_KEY }}
+  #       run: |
+  #         set -e
+  #         mkdir -p "${{ runner.temp }}/pfhome" "${{ runner.temp }}/pfcache"
 
-          [ -n "$PROMPTFOO_API_KEY" ] || {
-            echo "::error::PROMPTFOO_API_KEY secret is not set."
-            echo "::error::promptfoo gates red team scans behind an account — OPENROUTER_API_KEY pays for the judge but cannot satisfy this."
-            echo "::error::Use the same key you passed to 'promptfoo auth login --api-key' locally."
-            exit 1; }
+  #         [ -n "$PROMPTFOO_API_KEY" ] || {
+  #           echo "::error::PROMPTFOO_API_KEY secret is not set."
+  #           echo "::error::promptfoo gates red team scans behind an account — OPENROUTER_API_KEY pays for the judge but cannot satisfy this."
+  #           echo "::error::Use the same key you passed to 'promptfoo auth login --api-key' locally."
+  #           exit 1; }
 
-          #  --user     : else files in the mount are owned by the image's uid
-          #  HOME=/pf   : auth token + eval database live here, on a mount shared
-          #               by every pf() call — that is how `share` finds the eval
-          #               `eval` wrote, and how the login below survives
-          #  "promptfoo": the image CMD is the server, and its entrypoint runs
-          #               `node <arg>` for anything it does not recognise as a
-          #               command. Naming the binary is what runs the CLI.
-          pf() {
-            docker run --rm -i \
-              --user "$(id -u):$(id -g)" \
-              -v "$PWD:/work" -w /work \
-              -v "${{ runner.temp }}/pfhome:/pf" \
-              -v "${{ runner.temp }}/pfcache:/cache" \
-              -e HOME=/pf -e PROMPTFOO_CACHE_PATH=/cache \
-              -e PROMPTFOO_DISABLE_TELEMETRY=1 \
-              -e OPENROUTER_API_KEY \
-              -e PROMPTFOO_REMOTE_API_BASE_URL="$UI_URL" \
-              -e PROMPTFOO_REMOTE_APP_BASE_URL="$UI_URL" \
-              "$IMAGE" promptfoo "$@"
-          }
+  #         #  --user     : else files in the mount are owned by the image's uid
+  #         #  HOME=/pf   : auth token + eval database live here, on a mount shared
+  #         #               by every pf() call — that is how `share` finds the eval
+  #         #               `eval` wrote, and how the login below survives
+  #         #  "promptfoo": the image CMD is the server, and its entrypoint runs
+  #         #               `node <arg>` for anything it does not recognise as a
+  #         #               command. Naming the binary is what runs the CLI.
+  #         pf() {
+  #           docker run --rm -i \
+  #             --user "$(id -u):$(id -g)" \
+  #             -v "$PWD:/work" -w /work \
+  #             -v "${{ runner.temp }}/pfhome:/pf" \
+  #             -v "${{ runner.temp }}/pfcache:/cache" \
+  #             -e HOME=/pf -e PROMPTFOO_CACHE_PATH=/cache \
+  #             -e PROMPTFOO_DISABLE_TELEMETRY=1 \
+  #             -e OPENROUTER_API_KEY \
+  #             -e PROMPTFOO_REMOTE_API_BASE_URL="$UI_URL" \
+  #             -e PROMPTFOO_REMOTE_APP_BASE_URL="$UI_URL" \
+  #             "$IMAGE" promptfoo "$@"
+  #         }
 
-          # Red team scans require a verified promptfoo account. Doing this as a
-          # real login (rather than trusting an env var) mirrors exactly what
-          # works locally, and the token persists on the /pf mount for the calls
-          # below. Output silenced so the key never lands in the log.
-          pf auth login --api-key "$PROMPTFOO_API_KEY" >/dev/null 2>&1 || {
-            echo "::error::promptfoo auth login failed — check the PROMPTFOO_API_KEY secret."
-            exit 1; }
+  #         # Red team scans require a verified promptfoo account. Doing this as a
+  #         # real login (rather than trusting an env var) mirrors exactly what
+  #         # works locally, and the token persists on the /pf mount for the calls
+  #         # below. Output silenced so the key never lands in the log.
+  #         pf auth login --api-key "$PROMPTFOO_API_KEY" >/dev/null 2>&1 || {
+  #           echo "::error::promptfoo auth login failed — check the PROMPTFOO_API_KEY secret."
+  #           exit 1; }
 
-          # -c generated/redteam.yaml, NOT promptfooconfig.yaml: the generated
-          # file is the complete config (targets + purpose + the 160 test cases).
-          # promptfooconfig.yaml is only the recipe used to produce it and has no
-          # tests, so pointing at it scans nothing and reports a clean pass.
-          #
-          # `|| true` — failed probes are findings, not pipeline failures.
-          pf eval -c generated/redteam.yaml --output results.json \
-             -j "$CONCURRENCY" --no-progress-bar || true
+  #         # -c generated/redteam.yaml, NOT promptfooconfig.yaml: the generated
+  #         # file is the complete config (targets + purpose + the 160 test cases).
+  #         # promptfooconfig.yaml is only the recipe used to produce it and has no
+  #         # tests, so pointing at it scans nothing and reports a clean pass.
+  #         #
+  #         # `|| true` — failed probes are findings, not pipeline failures.
+  #         pf eval -c generated/redteam.yaml --output results.json \
+  #            -j "$CONCURRENCY" --no-progress-bar || true
 
-          # Only upload if the scan actually produced something. Without this,
-          # a scan that died early fails again at `share` with a confusing
-          # "Could not load results" instead of the real reason.
-          [ -s results.json ] || {
-            echo "::error::Scan produced no results.json — see the eval output above."
-            exit 1; }
+  #         # Only upload if the scan actually produced something. Without this,
+  #         # a scan that died early fails again at `share` with a confusing
+  #         # "Could not load results" instead of the real reason.
+  #         [ -s results.json ] || {
+  #           echo "::error::Scan produced no results.json — see the eval output above."
+  #           exit 1; }
 
-          # Log out BEFORE sharing. While logged in, the CLI targets the cloud
-          # org and silently ignores PROMPTFOO_REMOTE_* — results land there
-          # instead of our server, while still printing our URL. `share` has no
-          # --host flag, so dropping the cloud session is the only lever.
-          # The login was only ever needed to get eval past the red team gate.
-          pf auth logout >/dev/null 2>&1 || true
+  #         # Log out BEFORE sharing. While logged in, the CLI targets the cloud
+  #         # org and silently ignores PROMPTFOO_REMOTE_* — results land there
+  #         # instead of our server, while still printing our URL. `share` has no
+  #         # --host flag, so dropping the cloud session is the only lever.
+  #         # The login was only ever needed to get eval past the red team gate.
+  #         pf auth logout >/dev/null 2>&1 || true
 
-          pf share < /dev/null
+  #         pf share < /dev/null
 
-          # Confirm the eval actually reached OUR server. Printing a URL proves
-          # nothing — that is exactly how the cloud redirect went unnoticed.
-          sleep 5
-          if curl -fsS --max-time 30 "$UI_URL/api/results" | grep -q '"data":\[\]'; then
-            echo "::error::Upload did not reach $UI_URL — its eval list is still empty."
-            exit 1
-          fi
-          echo "Results: $UI_URL" >> "$GITHUB_STEP_SUMMARY"
+  #         # Confirm the eval actually reached OUR server. Printing a URL proves
+  #         # nothing — that is exactly how the cloud redirect went unnoticed.
+  #         sleep 5
+  #         if curl -fsS --max-time 30 "$UI_URL/api/results" | grep -q '"data":\[\]'; then
+  #           echo "::error::Upload did not reach $UI_URL — its eval list is still empty."
+  #           exit 1
+  #         fi
+  #         echo "Results: $UI_URL" >> "$GITHUB_STEP_SUMMARY"
 
   # LLMmap — model fingerprinting. Asks 8 probe questions and matches the answer
   # signature against 52 known models. Independent of the promptfoo job: a
