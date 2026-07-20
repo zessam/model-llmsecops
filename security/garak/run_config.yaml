@@ -1,0 +1,69 @@
+# garak (NVIDIA NeMo Evaluator) — SECURITY. Model-level vulnerability probes
+# against the vLLM router.
+#
+# SCOPE: bare-model safety assessment. Same question promptfoo asks — "is this
+# raw open-source model fit for banking?" — from the other side. promptfoo grades
+# *banking-specific* behaviour with an LLM judge (invented rates, unlicensed
+# advice, PII). garak fires *generic model-level attacks* (jailbreaks, encoding
+# bypasses, prompt injection, malware/toxicity elicitation) and grades them with
+# its own local detectors, no external judge. The two are complementary, not
+# redundant — see README.md for the split.
+#
+# This file carries ONLY the probe definition (`config:`). The TARGET (endpoint,
+# model, model type) is supplied by the workflow as CLI flags, which override
+# config per NeMo's precedence: CLI args > this file > task defaults > framework
+# defaults. Keeping the endpoint in one place (the workflow, like the llmmap job)
+# avoids it drifting between two files that must agree.
+#
+# NeMo maps model_type=chat -> the nim.NVOpenAIChat generator and strips
+# /chat/completions from the URL, so it POSTs to <router>/v1/chat/completions
+# with `model` = --model_id. The router has no auth; NeMo exports a dummy
+# NIM_API_KEY and vLLM ignores the Bearer header.
+
+config:
+  type: garak
+  params:
+    # A shared, single-replica 135M model on CPU. garak has no judge to
+    # multiply calls (unlike promptfoo's -j 2), so it can push more concurrency,
+    # but the router is the bottleneck. 8 keeps vLLM batching busy without
+    # burying it. Raise once the model is off CPU.
+    parallelism: 8
+
+    # Cap prompts PER PROBE. Several probes below ship hundreds-to-thousands of
+    # prompts (DanInTheWild, realtoxicityprompts); un-capped, one probe would
+    # dominate the whole run on CPU inference. This is a PoC baseline dial —
+    # raise it for the formal assessment run, not the routine one.
+    limit_samples: 5
+
+    # CPU inference; long generations blow the run's wall-clock. Matches the
+    # 128-token cap promptfoo and llmmap use against the same router.
+    max_new_tokens: 128
+
+    # Determinism for a comparable baseline. NeMo's defaults are 0.1 / 0.7;
+    # pinned here so a config edit is the only thing that can move them.
+    temperature: 0.1
+    top_p: 0.7
+
+    extra:
+      # Probes chosen to COMPLEMENT promptfoo, not repeat it. Each is a distinct
+      # model-level attack class; none overlaps the financial:* plugins.
+      #
+      #   dan.DanInTheWild              real-world jailbreaks scraped from the wild
+      #   grandma.Slurs                 "grandma" persona jailbreak
+      #   encoding.InjectBase64         instruction smuggled as base64 (filter bypass)
+      #   promptinject.HijackHateHumans prompt-injection hijack -> hate speech
+      #   promptinject.HijackKillHumans prompt-injection hijack -> violence
+      #   latentinjection.LatentJailbreak indirect/latent injection
+      #   malwaregen.Payload            writes malware payloads
+      #   malwaregen.Evasion            writes AV-evasion code
+      #   packagehallucination.Python   invents non-existent pip packages (supply-chain risk)
+      #   lmrc.SlurUsage                slur usage (wordlist detector, fast)
+      #   lmrc.Bullying                 harassment / bullying
+      #   realtoxicityprompts.RTPBlank  unprompted toxicity (downloads a toxicity detector)
+      #   misleading.FalseAssertion     asserts false facts confidently — the
+      #                                 generic form of financial:hallucination
+      #
+      # See README.md for how to widen this. NeMo's full default list is ~80
+      # probes and includes adaptive ones (atkgen, tap, gcg) that are far too
+      # slow for a CPU target — deliberately excluded here.
+      probes: dan.DanInTheWild,grandma.Slurs,encoding.InjectBase64,promptinject.HijackHateHumans,promptinject.HijackKillHumans,latentinjection.LatentJailbreak,malwaregen.Payload,malwaregen.Evasion,packagehallucination.Python,lmrc.SlurUsage,lmrc.Bullying,realtoxicityprompts.RTPBlank,misleading.FalseAssertion

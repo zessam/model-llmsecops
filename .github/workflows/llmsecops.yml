@@ -147,10 +147,17 @@ jobs:
           echo "Results: $UI_URL" >> "$GITHUB_STEP_SUMMARY"
 
   # LLMmap — model fingerprinting. Asks 8 probe questions and matches the answer
-  # signature against 52 known models. Independent of the promptfoo job: a
-  # fingerprint result does not depend on a scan and vice versa.
+  # signature against 52 known models.
+  #
+  # Runs AFTER promptfoo, not alongside it. The results do not depend on each
+  # other, but all three tools hammer the same single-replica CPU router, so
+  # running them serially keeps them from contending for it (and from muddying
+  # each other's latency). `if: always()` — start once promptfoo *finishes*,
+  # pass or fail; a promptfoo failure is a finding, not a reason to skip this.
   llmmap:
     runs-on: ubuntu-latest
+    needs: promptfoo
+    if: always()
     steps:
       - uses: actions/checkout@v5
 
@@ -194,4 +201,81 @@ jobs:
         with:
           name: llmmap-results
           path: llmmap-results.json
+          if-no-files-found: warn
+
+  # garak — model-level vulnerability scanning via NVIDIA NeMo Evaluator, run
+  # from NVIDIA's official eval-factory container. Fires generic adversarial
+  # probes (jailbreaks, encoding bypass, prompt injection, malware/toxicity
+  # elicitation) at the router and grades them with garak's own local detectors.
+  # Complementary to promptfoo, which grades banking-specific behaviour with an
+  # LLM judge — see security/garak/README.md. Independent of the other jobs.
+  #
+  # Runs LAST, after llmmap finishes — serialised with the others so the three
+  # tools do not contend for the single-replica CPU router. `if: always()` so an
+  # upstream failure does not skip the safety scan.
+  #
+  # Secret required:
+  #   NCG_API_KEY   NGC API key — needed to pull the eval-factory image from nvcr.io
+  garak:
+    runs-on: ubuntu-latest
+    environment: production
+    needs: llmmap
+    if: always()
+    steps:
+      - uses: actions/checkout@v5
+
+      # garak's ML-backed detectors (e.g. realtoxicityprompts' toxicity model)
+      # download from HuggingFace on first use. Cache them across runs and mount
+      # the cache into the container below. Static weights — bump the key only if
+      # the probe set gains or loses a model-backed detector.
+      - name: Cache garak detector models
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/hf-cache
+          key: garak-detectors-v1
+
+      # NGC gates the eval-factory images behind an account. The username is the
+      # literal string $oauthtoken when authenticating with an API key.
+      - name: Log in to NGC
+        run: |
+          [ -n "${{ secrets.NCG_API_KEY }}" ] || {
+            echo "::error::NCG_API_KEY secret is not set — cannot pull nvcr.io/nvidia/eval-factory/garak."
+            exit 1; }
+          echo "${{ secrets.NCG_API_KEY }}" \
+            | docker login nvcr.io -u '$oauthtoken' --password-stdin
+
+      # :latest is mutable, so — unlike the pinned promptfoo image — this is NOT
+      # cached: a cache key that never invalidates would pin a stale build. It
+      # also means two runs are not guaranteed to use the same garak. Pin a dated
+      # tag (e.g. :25.10) for a reproducible formal assessment run.
+      - name: Pull garak container
+        run: docker pull nvcr.io/nvidia/eval-factory/garak:latest
+
+      # Endpoint is passed here (not baked into run_config.yaml) so it is defined
+      # once; CLI flags override config per NeMo precedence. Same router the other
+      # jobs target — a public IP, reachable from the container's default bridge.
+      # run_config.yaml is mounted read-only; results and the HF cache are bind
+      # mounts so they outlive the container. The router is unauthenticated, so
+      # NeMo falls back to a dummy NIM_API_KEY on its own.
+      - name: Run garak safety probes
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/garak-results" "${{ runner.temp }}/hf-cache"
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE/security/garak/run_config.yaml:/workspace/run_config.yaml:ro" \
+            -v "$GITHUB_WORKSPACE/garak-results:/workspace/results" \
+            -v "${{ runner.temp }}/hf-cache:/root/.cache/huggingface" \
+            nvcr.io/nvidia/eval-factory/garak:latest \
+            nemo-evaluator run_eval \
+              --eval_type garak \
+              --model_id HuggingFaceTB/SmolLM2-135M-Instruct \
+              --model_type chat \
+              --model_url http://136.116.192.130/v1/chat/completions \
+              --run_config /workspace/run_config.yaml \
+              --output_dir /workspace/results
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: garak-results
+          path: garak-results/
           if-no-files-found: warn
