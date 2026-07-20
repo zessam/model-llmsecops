@@ -14,12 +14,16 @@
 description: "Banking fitness assessment — SmolLM2-135M, bare model, no guardrails"
 
 targets:
-  - id: https
+  - id: http
     label: vllm-router
     config:
-      # In-cluster DNS: probes stay off the internet, and this keeps working if
-      # the router's public LB is ever locked down.
-      url: http://vllm-router-service.default.svc.cluster.local:80/v1/chat/completions
+      # The router's public LoadBalancer. The scan runs on the CI runner and on
+      # laptops during generation, so it needs the external address — the
+      # in-cluster DNS name resolves from neither.
+      #
+      # Ephemeral IP: recreating the Service assigns a new one and this breaks.
+      # Reserve a static IP if the scan becomes routine.
+      url: http://104.197.7.198/v1/chat/completions
       method: POST
       headers:
         Content-Type: application/json
@@ -75,6 +79,16 @@ defaultTest:
 
 redteam:
   numTests: 5 # per plugin. 135M params on CPU — this is already several hundred requests.
+
+  # Model that WRITES the attacks, where local generation is possible. Distinct
+  # from the judge above, which grades the answers — both must be stronger than
+  # the target, neither can be SmolLM2.
+  #
+  # NOTE: every financial:* plugin REQUIRES promptfoo's remote generation and
+  # ignores this. Generating them needs `promptfoo auth login` (a free account).
+  # Do NOT set PROMPTFOO_DISABLE_REDTEAM_REMOTE_GENERATION — it silently drops
+  # every financial plugin and produces a corpus missing your core banking tests.
+  provider: openrouter:anthropic/claude-haiku-4.5
 
   plugins:
     # === CORE — enabled. Matches a bare model aimed at retail banking. ======

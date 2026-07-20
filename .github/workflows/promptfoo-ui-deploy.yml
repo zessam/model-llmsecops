@@ -1,8 +1,7 @@
 name: Promptfoo UI Deploy
 
-# Deploys the promptfoo results UI. That is all it does.
-# It does not wait for the pod to become ready — check with:
-#   kubectl -n promptfoo get pod
+# Renders the chart, scans it, deploys it. Does not wait for the pod to be
+# ready — check with: kubectl -n promptfoo get pod
 
 on:
   workflow_dispatch:
@@ -10,6 +9,7 @@ on:
 permissions:
   contents: read
   id-token: write
+  security-events: write # Trivy findings -> Security tab
 
 env:
   CLUSTER_NAME: model-llmsecops-cluster
@@ -17,8 +17,8 @@ env:
   NAMESPACE: promptfoo
   RELEASE: promptfoo
   VALUES: kubernetes/promptfoo/values.yaml
-  # The chart is not published to a chart repo — it lives in the promptfoo git
-  # repo. Pinned to the tag matching image.tag in values.yaml.
+  # Chart is not on a chart repo — it lives in the promptfoo git repo.
+  # Pinned to the tag matching image.tag in values.yaml.
   CHART_REPO: https://github.com/promptfoo/promptfoo.git
   CHART_REF: "0.109.1"
 
@@ -28,6 +28,32 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@v5
+
+      - uses: azure/setup-helm@v5
+
+      - name: Render and validate
+        run: |
+          set -e
+          git clone --depth 1 --branch "$CHART_REF" "$CHART_REPO" /tmp/chart
+          mkdir -p rendered
+          helm template "$RELEASE" /tmp/chart/helm/chart/promptfoo \
+            -n "$NAMESPACE" -f "$VALUES" > rendered/manifests.yaml
+          docker run --rm -v "$PWD/rendered:/r" ghcr.io/yannh/kubeconform:v0.6.7 \
+            -summary -ignore-missing-schemas /r/manifests.yaml
+
+      - uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: rendered
+          format: sarif
+          output: trivy.sarif
+          exit-code: "0" # report, do not block — same as vllm-deploy.yml
+
+      - uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: trivy.sarif
+          category: trivy-promptfoo-ui
 
       - uses: google-github-actions/auth@v3
         with:
@@ -40,11 +66,7 @@ jobs:
           location: ${{ env.CLUSTER_LOCATION }}
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
-      - uses: azure/setup-helm@v5
-
       - name: Deploy
         run: |
-          git clone --depth 1 --branch "$CHART_REF" "$CHART_REPO" /tmp/chart
           helm upgrade --install "$RELEASE" /tmp/chart/helm/chart/promptfoo \
-            -n "$NAMESPACE" --create-namespace \
-            -f "$VALUES"
+            -n "$NAMESPACE" --create-namespace -f "$VALUES"

@@ -3,20 +3,19 @@ name: LLMSecOps
 # Runs the promptfoo red team scan and uploads the report to the UI.
 #
 # Change WHAT is tested -> kubernetes/promptfoo/promptfooconfig.yaml
-# Change HOW it runs    -> the env block below
+# Change the target     -> the `url` in that same file
+# Change WHERE results go -> UI_URL below
 
 on:
   workflow_dispatch:
 
 permissions:
   contents: read
-  id-token: write
 
 env:
-  CLUSTER_NAME: model-llmsecops-cluster
-  CLUSTER_LOCATION: us-central1-c
-  NAMESPACE: default # where the model runs
-  UI_NAMESPACE: promptfoo # where the results UI runs
+  # Public LoadBalancer of the promptfoo UI. Ephemeral — reserve a static IP if
+  # this becomes routine, or this silently points at nothing.
+  UI_URL: http://104.154.235.104:3000
   PROMPTFOO_IMAGE: ghcr.io/promptfoo/promptfoo:latest
   CONCURRENCY: 2 # each test calls the model AND the judge
 
@@ -26,17 +25,6 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@v5
-
-      - uses: google-github-actions/auth@v3
-        with:
-          workload_identity_provider: ${{ secrets.WORKLOAD_PROVIDER }}
-          service_account: ${{ secrets.SERVICE_ACCOUNT }}
-
-      - uses: google-github-actions/get-gke-credentials@v3
-        with:
-          cluster_name: ${{ env.CLUSTER_NAME }}
-          location: ${{ env.CLUSTER_LOCATION }}
-          project_id: ${{ secrets.GCP_PROJECT_ID }}
 
       # promptfoo caches LLM responses — a re-run does not pay the judge again
       # for pairs it already graded.
@@ -54,13 +42,12 @@ jobs:
           set -e
           mkdir -p "${{ runner.temp }}/promptfoo/cache"
 
-          lb() { kubectl -n "$1" get svc "$2" -o jsonpath='{.status.loadBalancer.ingress[0].ip}'; }
-          MODEL="http://$(lb "$NAMESPACE" vllm-router-service):80"
-          UI="http://$(lb "$UI_NAMESPACE" promptfoo):3000"
-
-          #  --user   : else files in the mount are owned by the image's uid
-          #  HOME=/pf : puts the eval database on the mount, so `share` can find
-          #             the eval that `redteam eval` just wrote
+          #  --user     : else files in the mount are owned by the image's uid
+          #  HOME=/pf   : puts the eval database on the mount, so `share` can
+          #               find the eval that `redteam eval` just wrote
+          #  "promptfoo": the image CMD is the server, and its entrypoint runs
+          #               `node <arg>` for anything it does not recognise as a
+          #               command. Naming the binary is what runs the CLI.
           pf() {
             docker run --rm -i \
               --user "$(id -u):$(id -g)" \
@@ -68,17 +55,19 @@ jobs:
               -v "${{ runner.temp }}/promptfoo:/pf" \
               -e HOME=/pf -e PROMPTFOO_CACHE_PATH=/pf/cache \
               -e PROMPTFOO_DISABLE_TELEMETRY=1 -e OPENROUTER_API_KEY \
-              -e PROMPTFOO_REMOTE_API_BASE_URL="$UI" \
-              -e PROMPTFOO_REMOTE_APP_BASE_URL="$UI" \
-              "$PROMPTFOO_IMAGE" "$@"
+              -e PROMPTFOO_REMOTE_API_BASE_URL="$UI_URL" \
+              -e PROMPTFOO_REMOTE_APP_BASE_URL="$UI_URL" \
+              "$PROMPTFOO_IMAGE" promptfoo "$@"
           }
 
-          # Config holds the in-cluster address; use the public LB from here.
-          sed -i "s|http://vllm-router-service.default.svc.cluster.local:80|$MODEL|" promptfooconfig.yaml
-
+          # -c generated/redteam.yaml, NOT promptfooconfig.yaml: the generated
+          # file is a complete config (targets + purpose + the 160 test cases).
+          # promptfooconfig.yaml is only the recipe used to produce it and has
+          # no tests, so pointing at it scans nothing and reports a clean pass.
+          #
           # `|| true` — failed probes are findings, not pipeline failures.
-          pf redteam eval -c promptfooconfig.yaml --output results.json \
+          pf eval -c generated/redteam.yaml --output results.json \
              -j "$CONCURRENCY" --no-progress-bar || true
 
           pf share --yes < /dev/null
-          echo "Results: $UI" >> "$GITHUB_STEP_SUMMARY"
+          echo "Results: $UI_URL" >> "$GITHUB_STEP_SUMMARY"

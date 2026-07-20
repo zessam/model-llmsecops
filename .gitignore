@@ -14,3 +14,7 @@ crash.log
 # Python (security probe scripts)
 __pycache__/
 *.pyc
+
+# promptfoo auth token (contains a credential) and scan output
+kubernetes/promptfoo/.pfhome/
+kubernetes/promptfoo/results.json
