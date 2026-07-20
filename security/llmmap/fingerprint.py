@@ -20,7 +20,29 @@ import os
 import sys
 import urllib.request
 
-from LLMmap.inference import load_LLMmap
+# Python puts THIS file's directory on sys.path, not the working directory — so
+# importing LLMmap fails when the script lives outside the cloned repo, which is
+# exactly how it is used here. Run from the LLMmap checkout and this finds it.
+sys.path.insert(0, os.getcwd())
+
+import torch  # noqa: E402
+
+# LLMmap's pretrained model.pt was saved on a Mac, so its tensors carry an "mps"
+# device tag. Their load_LLMmap() calls torch.load() without map_location, which
+# then fails on any non-Apple machine with:
+#   RuntimeError: Storage device not recognized: mps
+# Default every load to CPU rather than patching their repo in place.
+_torch_load = torch.load
+
+
+def _load_on_cpu(*args, **kwargs):
+    kwargs.setdefault("map_location", "cpu")
+    return _torch_load(*args, **kwargs)
+
+
+torch.load = _load_on_cpu
+
+from LLMmap.inference import load_LLMmap  # noqa: E402
 
 URL = os.environ["TARGET_URL"]
 MODEL = os.environ.get("TARGET_MODEL", "")

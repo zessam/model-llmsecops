@@ -159,6 +159,15 @@ jobs:
           python-version: "3.11" # LLMmap's stated requirement
           cache: pip
 
+      # LLMmap embeds responses with intfloat/multilingual-e5-large-instruct —
+      # ~2.2GB pulled from HuggingFace on every cold run. Static weights, so the
+      # key never needs to change; bump it only if LLMmap changes its embedder.
+      - name: Cache embedding model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-e5-large-instruct-v1
+
       - name: Install LLMmap
         run: |
           set -e
@@ -166,6 +175,9 @@ jobs:
           # CPU torch first, or pip pulls the ~2GB CUDA build for nothing.
           pip install --quiet torch==2.7.1 --index-url https://download.pytorch.org/whl/cpu
           pip install --quiet -r /tmp/llmmap/requirements.txt
+          # Missing from their requirements.txt: LLMmap passes device_map to
+          # transformers.from_pretrained, which hard-requires accelerate.
+          pip install --quiet accelerate
 
       - name: Fingerprint the model
         working-directory: /tmp/llmmap
