@@ -20,7 +20,7 @@ permissions:
 env:
   # Public LoadBalancer of the promptfoo UI. Ephemeral — reserve a static IP if
   # this becomes routine, or this silently points at nothing.
-  UI_URL: http://104.154.235.104:3000
+  UI_URL: http://136.116.192.130:3000
   # Pinned, not :latest — a mutable tag cannot be cached correctly, and it lets
   # the CLI drift ahead of the server (values.yaml image.tag). Bump both together.
   PROMPTFOO_VERSION: 0.121.19
@@ -184,7 +184,7 @@ jobs:
       - name: Fingerprint the model
         working-directory: /tmp/llmmap
         env:
-          TARGET_URL: http://104.197.7.198/v1/chat/completions
+          TARGET_URL: http://136.116.192.130/v1/chat/completions
           TARGET_MODEL: HuggingFaceTB/SmolLM2-135M-Instruct
           OUT: ${{ github.workspace }}/llmmap-results.json
         run: python "$GITHUB_WORKSPACE/security/llmmap/fingerprint.py"
