@@ -2,9 +2,14 @@ name: LLMSecOps
 
 # Runs the promptfoo red team scan and uploads the report to the UI.
 #
-# Change WHAT is tested -> kubernetes/promptfoo/promptfooconfig.yaml
-# Change the target     -> the `url` in that same file
+# Change WHAT is tested   -> kubernetes/promptfoo/promptfooconfig.yaml, then
+#                            regenerate generated/redteam.yaml and commit it
+# Change the target       -> the `url` in that same file
 # Change WHERE results go -> UI_URL below
+#
+# Secrets required:
+#   PROMPTFOO_API_KEY   promptfoo cloud (redteam graders need it, same as generate)
+#   OPENROUTER_API_KEY  the judge model
 
 on:
   workflow_dispatch:
@@ -16,7 +21,9 @@ env:
   # Public LoadBalancer of the promptfoo UI. Ephemeral — reserve a static IP if
   # this becomes routine, or this silently points at nothing.
   UI_URL: http://104.154.235.104:3000
-  PROMPTFOO_IMAGE: ghcr.io/promptfoo/promptfoo:latest
+  # Pinned, not :latest — a mutable tag cannot be cached correctly, and it lets
+  # the CLI drift ahead of the server (values.yaml image.tag). Bump both together.
+  PROMPTFOO_VERSION: 0.121.19
   CONCURRENCY: 2 # each test calls the model AND the judge
 
 jobs:
@@ -26,25 +33,52 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # promptfoo caches LLM responses — a re-run does not pay the judge again
-      # for pairs it already graded.
-      - uses: actions/cache@v4
+      # Cache the image tarball. Only correct because the tag is pinned — with
+      # :latest the key would never invalidate and you would run a stale build.
+      - name: Cache promptfoo image
+        uses: actions/cache@v4
+        with:
+          path: ~/.docker-cache
+          key: promptfoo-image-${{ env.PROMPTFOO_VERSION }}
+
+      # promptfoo also caches LLM responses, so a re-run does not pay the judge
+      # again for pairs it already graded.
+      - name: Cache promptfoo responses
+        uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/promptfoo
-          key: promptfoo-${{ github.run_id }}
-          restore-keys: promptfoo-
+          key: promptfoo-cache-${{ github.run_id }}
+          restore-keys: promptfoo-cache-
+
+      - name: Load image
+        run: |
+          set -e
+          IMAGE="ghcr.io/promptfoo/promptfoo:${PROMPTFOO_VERSION}"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+          if [ -f ~/.docker-cache/promptfoo.tar ]; then
+            docker load -i ~/.docker-cache/promptfoo.tar
+          else
+            docker pull "$IMAGE"
+            mkdir -p ~/.docker-cache
+            docker save "$IMAGE" -o ~/.docker-cache/promptfoo.tar
+          fi
 
       - name: Scan and upload
         working-directory: kubernetes/promptfoo
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          PROMPTFOO_API_KEY: ${{ secrets.PROMPTFOO_API_KEY }}
         run: |
           set -e
           mkdir -p "${{ runner.temp }}/promptfoo/cache"
 
+          [ -n "$PROMPTFOO_API_KEY" ] || {
+            echo "::error::PROMPTFOO_API_KEY secret is not set. Redteam graders need it — without it the run stops at an email prompt."
+            exit 1; }
+
           #  --user     : else files in the mount are owned by the image's uid
           #  HOME=/pf   : puts the eval database on the mount, so `share` can
-          #               find the eval that `redteam eval` just wrote
+          #               find the eval that `eval` just wrote
           #  "promptfoo": the image CMD is the server, and its entrypoint runs
           #               `node <arg>` for anything it does not recognise as a
           #               command. Naming the binary is what runs the CLI.
@@ -54,20 +88,28 @@ jobs:
               -v "$PWD:/work" -w /work \
               -v "${{ runner.temp }}/promptfoo:/pf" \
               -e HOME=/pf -e PROMPTFOO_CACHE_PATH=/pf/cache \
-              -e PROMPTFOO_DISABLE_TELEMETRY=1 -e OPENROUTER_API_KEY \
+              -e PROMPTFOO_DISABLE_TELEMETRY=1 \
+              -e OPENROUTER_API_KEY -e PROMPTFOO_API_KEY \
               -e PROMPTFOO_REMOTE_API_BASE_URL="$UI_URL" \
               -e PROMPTFOO_REMOTE_APP_BASE_URL="$UI_URL" \
-              "$PROMPTFOO_IMAGE" promptfoo "$@"
+              "$IMAGE" promptfoo "$@"
           }
 
           # -c generated/redteam.yaml, NOT promptfooconfig.yaml: the generated
-          # file is a complete config (targets + purpose + the 160 test cases).
-          # promptfooconfig.yaml is only the recipe used to produce it and has
-          # no tests, so pointing at it scans nothing and reports a clean pass.
+          # file is the complete config (targets + purpose + the 160 test cases).
+          # promptfooconfig.yaml is only the recipe used to produce it and has no
+          # tests, so pointing at it scans nothing and reports a clean pass.
           #
           # `|| true` — failed probes are findings, not pipeline failures.
           pf eval -c generated/redteam.yaml --output results.json \
              -j "$CONCURRENCY" --no-progress-bar || true
+
+          # Only upload if the scan actually produced something. Without this,
+          # a scan that died early fails again at `share` with a confusing
+          # "Could not load results" instead of the real reason.
+          [ -s results.json ] || {
+            echo "::error::Scan produced no results.json — see the eval output above."
+            exit 1; }
 
           pf share --yes < /dev/null
           echo "Results: $UI_URL" >> "$GITHUB_STEP_SUMMARY"
