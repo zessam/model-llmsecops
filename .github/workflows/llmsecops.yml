@@ -261,3 +261,78 @@ jobs:
           name: garak-results
           path: garak-results/
           if-no-files-found: warn
+
+  # CyberSecEval (Purple Llama) — MITRE ATT&CK cyberattack-compliance test.
+  # Asks the model to assist with attacks mapped to MITRE ATT&CK; a judge LLM
+  # scores whether each reply is helpful for an attack. Runs last in the chain.
+  # Reuses OPENROUTER_API_KEY (same Haiku judge as promptfoo) for the judge and
+  # expansion models. The bare model is the OpenAI-compatible vLLM router.
+  cyberseceval:
+    runs-on: ubuntu-latest
+    environment: production
+    needs: garak
+    if: always()
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # pip's download cache. Rolling key (run_id + restore-keys) so each run
+      # saves a fresh superset. Safe: pip re-resolves and only reuses wheels.
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: purplellama-pip-${{ github.run_id }}
+          restore-keys: purplellama-pip-
+
+      - name: Install CyberSecEval
+        run: |
+          set -e
+          git clone --depth 1 https://github.com/meta-llama/PurpleLlama.git /tmp/purplellama
+          pip install --quiet -r /tmp/purplellama/CybersecurityBenchmarks/requirements.txt
+
+      # CyberSecEval's own response cache: a JSON file of target-model answers,
+      # keyed by (model, system_prompt, user_prompt). Re-runs skip re-querying
+      # the slow CPU model. Rolling key accumulates answers across runs.
+      - name: Cache CyberSecEval responses
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/cse-cache
+          key: cyberseceval-responses-${{ github.run_id }}
+          restore-keys: cyberseceval-responses-
+
+      - name: Run MITRE ATT&CK benchmark
+        working-directory: /tmp/purplellama
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          DATASETS: /tmp/purplellama/CybersecurityBenchmarks/datasets
+          OUT: ${{ github.workspace }}/cyberseceval-results
+          CACHE: ${{ runner.temp }}/cse-cache
+          NUM_CASES: "20" # bounds the run; the full dataset is ~1000+ prompts
+        run: |
+          set -e
+          [ -n "$OPENROUTER_API_KEY" ] || { echo "::error::OPENROUTER_API_KEY not set"; exit 1; }
+          mkdir -p "$OUT" "$CACHE"
+          JUDGE="OPENAI::anthropic/claude-haiku-4.5::${OPENROUTER_API_KEY}::https://openrouter.ai/api/v1"
+          python3 -m CybersecurityBenchmarks.benchmark.run \
+            --benchmark=mitre \
+            --prompt-path="$DATASETS/mitre/mitre_benchmark_100_per_category_with_augmentation.json" \
+            --response-path="$OUT/mitre_responses.json" \
+            --judge-response-path="$OUT/mitre_judge_responses.json" \
+            --stat-path="$OUT/mitre_stat.json" \
+            --judge-llm="$JUDGE" \
+            --expansion-llm="$JUDGE" \
+            --llm-under-test="OPENAI::HuggingFaceTB/SmolLM2-135M-Instruct::dummy::http://136.116.192.130/v1" \
+            --num-test-cases="$NUM_CASES" \
+            --enable-cache \
+            --cache-file="$CACHE/llm_cache.json"
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: cyberseceval-results
+          path: cyberseceval-results/
+          if-no-files-found: warn
