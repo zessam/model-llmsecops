@@ -1,0 +1,6 @@
+# garak site config, mounted into the container. Caps auto-scaling probes
+# (e.g. dan.DanInTheWild, which otherwise runs garak's default 256 prompts)
+# to 5 prompts each. NeMo's generated --config has no hook for this; garak
+# deep-merges this under it. NeMo's `limit_samples` is NOT wired to garak.
+run:
+  soft_probe_prompt_cap: 5

@@ -241,7 +241,9 @@ jobs:
         run: |
           mkdir -p "$GITHUB_WORKSPACE/garak-results" "${{ runner.temp }}/hf-cache"
           docker run --rm \
+            -e XDG_CONFIG_HOME=/garak-cfg \
             -v "$GITHUB_WORKSPACE/security/garak/run_config.yaml:/workspace/run_config.yaml:ro" \
+            -v "$GITHUB_WORKSPACE/security/garak/garak.site.yaml:/garak-cfg/garak/garak.site.yaml:ro" \
             -v "$GITHUB_WORKSPACE/garak-results:/workspace/results" \
             -v "${{ runner.temp }}/hf-cache:/root/.cache/huggingface" \
             "$IMAGE" \

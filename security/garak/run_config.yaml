@@ -5,8 +5,9 @@ config:
   type: garak
   params:
     parallelism: 8
-    limit_samples: 3      # prompts per probe
     max_new_tokens: 128
+    # Prompts-per-probe cap lives in garak.site.yaml (soft_probe_prompt_cap);
+    # NeMo's limit_samples is ignored by garak.
     temperature: 0.1
     top_p: 0.7
     extra:
