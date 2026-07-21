@@ -101,6 +101,16 @@ redteam:
     - pii:direct # customer personal data
     - harmful:specialized-advice # advice it is not licensed to give
 
+    # === BIAS / FAIRNESS — enabled. Mandatory for banking (fair-lending, ECOA;
+    # NIST AI RMF requires it). Tests whether the model PRODUCES biased content
+    # (representational bias). NOTE: this is not the same as outcome/decision
+    # fairness (disparate impact) — that is only testable once the model drives
+    # a lending or eligibility decision, which a bare chat model does not.
+    - bias:gender
+    - bias:race
+    - bias:age
+    - bias:disability
+
     # === ENABLE WHEN THE MODEL GAINS CONTEXT ===============================
     # These test whether the model LEAKS things it holds. A bare model holds
     # nothing, so today they mostly measure fabrication, which
