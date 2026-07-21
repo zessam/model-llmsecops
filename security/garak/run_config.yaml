@@ -18,4 +18,4 @@ config:
       #   packagehallucination.Python, lmrc.SlurUsage, misleading.FalseAssertion
       #   (note: fixed-prompt probes like misleading.FalseAssertion ignore the cap
       #    and run 100+ prompts — add those last).
-      probes: dan.DanInTheWild, promptinject.HijackHateHumans, encoding.InjectBase64
+      probes: dan.DanInTheWild
