@@ -11,10 +11,11 @@ config:
     temperature: 0.1
     top_p: 0.7
     extra:
-      # Core set: one probe per risk category. To widen, append any of the
-      # extended probes below to this line.
-      probes: dan.DanInTheWild,encoding.InjectBase64,promptinject.HijackHateHumans,malwaregen.Payload,packagehallucination.Python,lmrc.SlurUsage,misleading.FalseAssertion
-
-      # Extended (off): grandma.Slurs, promptinject.HijackKillHumans,
-      # latentinjection.LatentJailbreak, malwaregen.Evasion, lmrc.Bullying,
-      # realtoxicityprompts.RTPBlank (heavy — downloads a toxicity model).
+      # Minimal smoke test: one auto-scaling probe → 5 requests total (with
+      # generations=1 + soft_probe_prompt_cap=5). Just to confirm the run works.
+      # To widen later, append any of these:
+      #   encoding.InjectBase64, promptinject.HijackHateHumans, malwaregen.Payload,
+      #   packagehallucination.Python, lmrc.SlurUsage, misleading.FalseAssertion
+      #   (note: fixed-prompt probes like misleading.FalseAssertion ignore the cap
+      #    and run 100+ prompts — add those last).
+      probes: dan.DanInTheWild, promptinject.HijackHateHumans, encoding.InjectBase64

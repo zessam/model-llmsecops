@@ -255,6 +255,13 @@ jobs:
               --run_config /workspace/run_config.yaml \
               --output_dir /workspace/results
 
+      # The container runs as root, so results are root-owned; hand them back to
+      # the runner user or upload-artifact fails with EACCES. always() so it runs
+      # even if the scan above errored.
+      - name: Fix results ownership
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE/garak-results" || true
+
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -311,7 +318,9 @@ jobs:
           DATASETS: /tmp/purplellama/CybersecurityBenchmarks/datasets
           OUT: ${{ github.workspace }}/cyberseceval-results
           CACHE: ${{ runner.temp }}/cse-cache
-          NUM_CASES: "20" # bounds the run; the full dataset is ~1000+ prompts
+          NUM_CASES: "5"   # smoke test; raise for the real assessment
+          MAX_TOKENS: "128" # cap output — the CPU model generating to the large
+                            # default was what caused minutes/prompt and timeouts
         run: |
           set -e
           [ -n "$OPENROUTER_API_KEY" ] || { echo "::error::OPENROUTER_API_KEY not set"; exit 1; }
@@ -327,6 +336,7 @@ jobs:
             --expansion-llm="$JUDGE" \
             --llm-under-test="OPENAI::HuggingFaceTB/SmolLM2-135M-Instruct::dummy::http://136.116.192.130/v1" \
             --num-test-cases="$NUM_CASES" \
+            --max-tokens="$MAX_TOKENS" \
             --enable-cache \
             --cache-file="$CACHE/llm_cache.json"
 

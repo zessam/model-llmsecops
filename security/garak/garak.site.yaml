@@ -3,4 +3,10 @@
 # to 5 prompts each. NeMo's generated --config has no hook for this; garak
 # deep-merges this under it. NeMo's `limit_samples` is NOT wired to garak.
 run:
+  # soft_probe_prompt_cap caps only AUTO-SCALING probes (e.g. dan.DanInTheWild).
+  # Fixed-prompt probes (e.g. misleading.FalseAssertion, 150 prompts) ignore it.
   soft_probe_prompt_cap: 5
+  # generations = attempts per prompt. garak's default is 5; on a CPU model
+  # (~44s/request) that 5x is what blew the run out to hours. 1 applies to
+  # EVERY probe, capped or not.
+  generations: 1
