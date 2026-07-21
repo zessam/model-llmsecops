@@ -60,12 +60,12 @@ garak pre-installed:
 ```sh
 # Pull requires an NGC account; username is the literal string $oauthtoken.
 echo "$NCG_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
-docker pull nvcr.io/nvidia/eval-factory/garak:latest
+docker pull nvcr.io/nvidia/eval-factory/garak:26.03
 
 docker run --rm \
     -v "$PWD/run_config.yaml:/workspace/run_config.yaml:ro" \
     -v "$PWD/results:/workspace/results" \
-    nvcr.io/nvidia/eval-factory/garak:latest \
+    nvcr.io/nvidia/eval-factory/garak:26.03 \
     nemo-evaluator run_eval \
         --eval_type garak \
         --model_id HuggingFaceTB/SmolLM2-135M-Instruct \
@@ -83,18 +83,20 @@ artifact.
 garak config without calling the model — the fastest way to check a
 `run_config.yaml` edit.
 
-### Container, and the `:latest` caveat
+### Container, pinned and cached
 
 We run the official container (`nvcr.io/nvidia/eval-factory/garak`) rather than
 the `nvidia-eval-factory-garak` pip wheel, so the whole toolchain — garak, its
 detectors, the NeMo CLI — is the exact build NVIDIA ships, with nothing assembled
 on the runner.
 
-The job pulls **`:latest`**, which is *mutable*: two runs are not guaranteed to
-use the same garak, and the image is deliberately **not** cached (a cache key that
-never invalidates would pin a stale build — the same reason the promptfoo job only
-caches because its tag is pinned). For a formal, reproducible assessment, pin a
-dated tag (e.g. `:25.10`) in both the workflow and here.
+The tag is **pinned** (`GARAK_VERSION` in the workflow, currently `26.03`), which
+buys two things: two runs use the identical garak (comparable baselines), and the
+image can be **cached** correctly — the job saves the tarball and keys the cache
+on the version, exactly like the promptfoo image. A mutable tag such as `:latest`
+would break both: the cache key would never invalidate and would pin a stale
+build. **Bump the tag in both the workflow and this file together**; the cache
+follows the version automatically. NGC login only happens on a cache miss.
 
 **Setup:** add an `NGC_API_KEY` from [ngc.nvidia.com](https://ngc.nvidia.com) as
 the repo/environment secret **`NCG_API_KEY`** (the name the workflow reads).
@@ -106,20 +108,27 @@ Everything is the `probes` line in `run_config.yaml` — a comma-separated list 
 `module.ProbeClass`. `nemo-evaluator ls` lists the harness; `garak --list_probes`
 lists every probe.
 
-The committed set is chosen to **complement promptfoo**, not repeat it: jailbreaks
-(`dan`, `grandma`), encoding bypass (`encoding`), prompt injection (`promptinject`,
-`latentinjection`), malware generation (`malwaregen`), package hallucination, slurs
-/ bullying (`lmrc`), unprompted toxicity (`realtoxicityprompts`), and confident
-false assertions (`misleading`). None overlaps the `financial:*` plugins.
+`run_config.yaml` keeps the list deliberately lean, tiered like promptfoo's config:
 
-**Deliberately excluded:** NeMo's full default list is ~80 probes and includes
-*adaptive* ones — `atkgen` (drives a red-team model), `tap`, `suffix.GCGCached` —
-that are far too slow against a 135M model on CPU. Add those only when the model
-is off CPU, and even then for a formal run, not the routine one.
+- **Core (7, enabled)** — **one probe per risk category**, chosen to *complement*
+  promptfoo (none overlaps the `financial:*` plugins): a jailbreak (`dan`),
+  encoding bypass (`encoding`), prompt injection (`promptinject`), malware
+  generation (`malwaregen`), package hallucination, slur usage (`lmrc`), and
+  confident false assertions (`misleading`). A small, fast, defensible baseline
+  over a bare model — not an exhaustive sweep.
+- **Extended (off)** — listed in the config's comments; append to the `probes`
+  line to widen. These are mostly a *second flavour* of a core category (another
+  jailbreak persona, a second malware/injection variant) or heavier probes like
+  `realtoxicityprompts` (thousands of prompts + a toxicity-model download).
 
-`limit_samples` caps prompts **per probe**; several probes ship thousands. It is
-the main runtime dial for a PoC baseline. Raise it (and `parallelism`) for the
-formal assessment.
+**Deliberately excluded entirely:** NeMo's full default list is ~80 probes and
+includes *adaptive* ones — `atkgen` (drives a red-team model), `tap`,
+`suffix.GCGCached` — far too slow against a 135M model on CPU. Add those only for
+a formal run, off CPU.
+
+Two runtime dials: the **probe count** above, and **`limit_samples`**, which caps
+prompts *per probe* (several probes ship thousands). Widen both for the formal
+assessment; keep them lean for the routine baseline.
 
 ## Reading results
 
