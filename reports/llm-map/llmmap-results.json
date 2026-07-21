@@ -1,0 +1,216 @@
+{
+  "target_url": "http://136.116.192.130/v1/chat/completions",
+  "target_model": "HuggingFaceTB/SmolLM2-135M-Instruct",
+  "closest_match": "Deci/DeciLM-7B-instruct",
+  "closest_distance": 35.646595373205585,
+  "ranking": [
+    {
+      "model": "Deci/DeciLM-7B-instruct",
+      "distance": 35.646595373205585
+    },
+    {
+      "model": "gpt-3.5-turbo",
+      "distance": 37.06467178118038
+    },
+    {
+      "model": "utter-project/EuroLLM-1.7B-Instruct",
+      "distance": 42.10671094476521
+    },
+    {
+      "model": "claude-3-haiku-20240307",
+      "distance": 43.808703717281865
+    },
+    {
+      "model": "Qwen/Qwen2.5-0.5B-Instruct",
+      "distance": 47.491112915067994
+    },
+    {
+      "model": "nvidia/Llama3-ChatQA-1.5-8B",
+      "distance": 48.14356061459668
+    },
+    {
+      "model": "abacusai/Smaug-Llama-3-70B-Instruct",
+      "distance": 48.36397560847839
+    },
+    {
+      "model": "microsoft/Phi-3-mini-4k-instruct",
+      "distance": 48.94338987340995
+    },
+    {
+      "model": "tiiuae/Falcon3-10B-Instruct",
+      "distance": 48.984740761959536
+    },
+    {
+      "model": "meta-llama/Llama-2-7b-chat-hf",
+      "distance": 49.022758621849434
+    },
+    {
+      "model": "openchat/openchat-3.6-8b-20240522",
+      "distance": 49.11189966913065
+    },
+    {
+      "model": "microsoft/Phi-3-mini-128k-instruct",
+      "distance": 49.133737101118065
+    },
+    {
+      "model": "mistralai/Mistral-7B-Instruct-v0.3",
+      "distance": 49.65876824060933
+    },
+    {
+      "model": "HuggingFaceH4/zephyr-7b-beta",
+      "distance": 49.820985233012784
+    },
+    {
+      "model": "upstage/SOLAR-10.7B-Instruct-v1.0",
+      "distance": 49.82405901014095
+    },
+    {
+      "model": "google/gemma-1.1-2b-it",
+      "distance": 49.85880477335056
+    },
+    {
+      "model": "microsoft/Phi-3.5-mini-instruct",
+      "distance": 50.130626300820275
+    },
+    {
+      "model": "NousResearch/Nous-Hermes-2-Mixtral-8x7B-DPO",
+      "distance": 50.13272326967138
+    },
+    {
+      "model": "gpt-4-turbo-2024-04-09",
+      "distance": 50.350846468209575
+    },
+    {
+      "model": "CohereForAI/aya-23-8B",
+      "distance": 50.42921649692231
+    },
+    {
+      "model": "Qwen/Qwen2.5-3B-Instruct",
+      "distance": 50.867431526502855
+    },
+    {
+      "model": "microsoft/Phi-3.5-MoE-instruct",
+      "distance": 51.11066176563683
+    },
+    {
+      "model": "google/gemma-2-9b-it",
+      "distance": 51.33342958123482
+    },
+    {
+      "model": "Qwen/Qwen2-1.5B-Instruct",
+      "distance": 51.3538328122795
+    },
+    {
+      "model": "Qwen/Qwen2-7B-Instruct",
+      "distance": 51.40659515737341
+    },
+    {
+      "model": "meta-llama/Llama-3.2-1B-Instruct",
+      "distance": 51.768487696176486
+    },
+    {
+      "model": "gradientai/Llama-3-8B-Instruct-Gradient-1048k",
+      "distance": 52.25766020417642
+    },
+    {
+      "model": "gpt-4o-2024-05-13",
+      "distance": 52.38224985105873
+    },
+    {
+      "model": "mistralai/Mistral-7B-Instruct-v0.1",
+      "distance": 52.71294821105337
+    },
+    {
+      "model": "google/gemma-1.1-7b-it",
+      "distance": 52.94069253528786
+    },
+    {
+      "model": "google/gemma-2-27b-it",
+      "distance": 53.01778233964253
+    },
+    {
+      "model": "tiiuae/Falcon3-7B-Instruct",
+      "distance": 53.04333320772127
+    },
+    {
+      "model": "ibm-granite/granite-3.1-8b-instruct",
+      "distance": 53.76762250738135
+    },
+    {
+      "model": "mistralai/Mistral-7B-Instruct-v0.2",
+      "distance": 54.19131551868116
+    },
+    {
+      "model": "internlm/internlm2_5-7b-chat",
+      "distance": 54.19718098524026
+    },
+    {
+      "model": "mistralai/Mixtral-8x7B-Instruct-v0.1",
+      "distance": 54.308660735401524
+    },
+    {
+      "model": "claude-3-5-sonnet-20240620",
+      "distance": 54.410221808871206
+    },
+    {
+      "model": "openchat/openchat_3.5",
+      "distance": 54.6321572138953
+    },
+    {
+      "model": "meta-llama/Meta-Llama-3-8B-Instruct",
+      "distance": 55.11742506541846
+    },
+    {
+      "model": "meta-llama/Meta-Llama-3-70B-Instruct",
+      "distance": 55.1537351618957
+    },
+    {
+      "model": "claude-3-opus-20240229",
+      "distance": 55.665615542779236
+    },
+    {
+      "model": "Qwen/Qwen2-72B-Instruct",
+      "distance": 56.242870966675405
+    },
+    {
+      "model": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+      "distance": 56.519224585975884
+    },
+    {
+      "model": "meta-llama/Llama-3.2-3B-Instruct",
+      "distance": 56.61124662615845
+    },
+    {
+      "model": "meta-llama/Meta-Llama-3.1-70B-Instruct",
+      "distance": 56.65257304484004
+    },
+    {
+      "model": "togethercomputer/Llama-2-7B-32K-Instruct",
+      "distance": 56.76540474982197
+    },
+    {
+      "model": "CohereForAI/aya-23-35B",
+      "distance": 57.05238799042898
+    },
+    {
+      "model": "google/gemma-7b-it",
+      "distance": 57.199521661925296
+    },
+    {
+      "model": "google/gemma-2b-it",
+      "distance": 57.63999759601451
+    },
+    {
+      "model": "ibm-granite/granite-3.0-8b-instruct",
+      "distance": 59.60929686042112
+    },
+    {
+      "model": "microsoft/Phi-3-medium-128k-instruct",
+      "distance": 60.85486833410776
+    },
+    {
+      "model": "microsoft/Phi-3-medium-4k-instruct",
+      "distance": 61.01444899485937
+    }
+  ]
+}

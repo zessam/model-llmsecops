@@ -1,0 +1,80 @@
+command: "cat > garak_config.yaml << 'EOF'\n{% if config.params.extra.seed is not\
+  \ none %}run:\n  seed: {{config.params.extra.seed}}{% endif %}\nplugins:\n  {% if\
+  \ config.params.extra.probes is not none %}probe_spec: {{config.params.extra.probes}}{%\
+  \ endif %}\n  extended_detectors: true\n  target_type: {% if target.api_endpoint.type\
+  \ == \"completions\" %}nim.NVOpenAICompletion{% elif target.api_endpoint.type ==\
+  \ \"chat\" %}nim.NVOpenAIChat{% endif %}\n  target_name: {{target.api_endpoint.model_id}}\n\
+  \  generators:\n    nim:\n      uri: {{target.api_endpoint.url | replace('/chat/completions',\
+  \ '') | replace('/completions', '')}}\n      {% if config.params.temperature is\
+  \ not none %}temperature: {{config.params.temperature}}{% endif %}\n      {% if\
+  \ config.params.top_p is not none %}top_p: {{config.params.top_p}}{% endif %}\n\
+  \      {% if config.params.max_new_tokens is not none %}max_tokens: {{config.params.max_new_tokens}}{%\
+  \ endif %}\n    skip_seq_start: {{config.params.extra.skip_seq_start}}\n    skip_seq_end:\
+  \ {{config.params.extra.skip_seq_end}}\n    \nsystem:\n  parallel_attempts: {{config.params.parallelism}}\n\
+  \  lite: false\nEOF\n{% if target.api_endpoint.api_key_name is not none %}\nexport\
+  \ NIM_API_KEY=${{target.api_endpoint.api_key_name}} &&\n{% else %}\nexport NIM_API_KEY=dummy\
+  \ &&\n{% endif %}\nexport XDG_DATA_HOME={{config.output_dir}} &&\ngarak --config\
+  \ garak_config.yaml --report_prefix=results\n"
+config:
+  output_dir: /workspace/results
+  params:
+    extra:
+      probes: dan.DanInTheWild
+      seed: 42
+      skip_seq_end: </think>
+      skip_seq_start: <think>
+    limit_samples: null
+    max_new_tokens: 128
+    max_retries: null
+    parallelism: 8
+    request_timeout: null
+    task: null
+    temperature: 0.1
+    top_p: 0.7
+  required_capabilities: null
+  supported_endpoint_types:
+  - chat
+  type: garak
+framework_name: garak
+pkg_name: garak
+target:
+  api_endpoint:
+    adapter_config:
+      discovery:
+        dirs: []
+        modules: []
+      endpoint_type: chat
+      interceptors:
+      - config:
+          cache_dir: /workspace/results/cache
+          max_saved_requests: 5
+          max_saved_responses: 5
+          reuse_cached_responses: true
+          save_requests: true
+          save_responses: true
+        enabled: true
+        name: caching
+      - config: {}
+        enabled: true
+        name: endpoint
+      - config:
+          cache_dir: /workspace/results/response_stats_cache
+          logging_aggregated_stats_interval: 100
+        enabled: true
+        name: response_stats
+      log_failed_requests: false
+      mode: server
+      post_eval_hooks:
+      - config:
+          html_report_size: 5
+          report_types:
+          - html
+          - json
+        enabled: true
+        name: post_eval_report
+    api_key: null
+    api_key_name: API_KEY
+    model_id: HuggingFaceTB/SmolLM2-135M-Instruct
+    stream: null
+    type: chat
+    url: http://136.116.192.130/v1/chat/completions

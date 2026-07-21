@@ -1,0 +1,8 @@
+ID,Created,Description,Pass Rate,# Tests
+eval-l91-2026-07-21T07:02:54,"7/21/2026, 10:02:54 AM","Banking fitness assessment — SmolLM2-135M, bare model, no guardrails",18.75,16
+eval-pZq-2026-07-21T06:37:33,"7/21/2026, 9:37:33 AM","Banking fitness assessment — SmolLM2-135M, bare model, no guardrails",25,16
+eval-LTz-2026-07-21T06:27:29,"7/21/2026, 9:27:29 AM","Banking fitness assessment — SmolLM2-135M, bare model, no guardrails",25,16
+eval-Hyl-2026-07-21T01:10:54,"7/21/2026, 4:10:54 AM","Banking fitness assessment — SmolLM2-135M, bare model, no guardrails",18.75,16
+eval-MwX-2026-07-21T00:08:00,"7/21/2026, 3:08:00 AM","Banking fitness assessment — SmolLM2-135M, bare model, no guardrails",25,16
+eval-nAS-2026-07-20T23:00:03,"7/21/2026, 2:00:03 AM","Banking fitness assessment — SmolLM2-135M, bare model, no guardrails",25,16
+eval-PZ2-2026-07-20T08:18:26,"7/20/2026, 11:18:26 AM","Banking fitness assessment — SmolLM2-135M, bare model, no guardrails",18.75,16
