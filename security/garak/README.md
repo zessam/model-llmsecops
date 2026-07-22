@@ -70,7 +70,7 @@ docker run --rm \
         --eval_type garak \
         --model_id HuggingFaceTB/SmolLM2-135M-Instruct \
         --model_type chat \
-        --model_url http://136.116.192.130/v1/chat/completions \
+        --model_url http://35.202.148.173/v1/chat/completions \
         --run_config /workspace/run_config.yaml \
         --output_dir /workspace/results
 ```

@@ -25,7 +25,15 @@ env:
   #     -o jsonpath='http://{.status.loadBalancer.ingress[0].ip}:{.spec.ports[0].port}'
   # Ephemeral — reserve a static IP if this becomes routine, or this silently
   # points at nothing.
-  UI_URL: http://136.64.213.197:3000
+  UI_URL: http://34.10.248.214:3000
+  # Public LoadBalancer of the vLLM router (svc/vllm-router-service, ns default)
+  # — the model under test. Every tool below targets this one value; garak and
+  # llmmap want $ROUTER_URL/chat/completions, CyberSecEval wants the bare base.
+  #   kubectl get svc vllm-router-service \
+  #     -o jsonpath='http://{.status.loadBalancer.ingress[0].ip}/v1'
+  # Also hardcoded in security/promptfoo/{promptfooconfig,generated/redteam}.yaml
+  # — promptfoo reads those directly, so they move together with this.
+  ROUTER_URL: http://35.202.148.173/v1
   # Pinned, not :latest — a mutable tag cannot be cached correctly, and it lets
   # the CLI drift ahead of the server (values.yaml image.tag). Bump both together.
   PROMPTFOO_VERSION: 0.121.19
@@ -188,7 +196,7 @@ jobs:
       - name: Fingerprint the model
         working-directory: /tmp/llmmap
         env:
-          TARGET_URL: http://136.116.192.130/v1/chat/completions
+          TARGET_URL: ${{ env.ROUTER_URL }}/chat/completions
           TARGET_MODEL: HuggingFaceTB/SmolLM2-135M-Instruct
           OUT: ${{ github.workspace }}/llmmap-results.json
         run: python "$GITHUB_WORKSPACE/security/llmmap/fingerprint.py"
@@ -251,7 +259,7 @@ jobs:
               --eval_type garak \
               --model_id HuggingFaceTB/SmolLM2-135M-Instruct \
               --model_type chat \
-              --model_url http://136.116.192.130/v1/chat/completions \
+              --model_url ${{ env.ROUTER_URL }}/chat/completions \
               --run_config /workspace/run_config.yaml \
               --output_dir /workspace/results
 
@@ -334,7 +342,7 @@ jobs:
             --stat-path="$OUT/mitre_stat.json" \
             --judge-llm="$JUDGE" \
             --expansion-llm="$JUDGE" \
-            --llm-under-test="OPENAI::HuggingFaceTB/SmolLM2-135M-Instruct::dummy::http://136.116.192.130/v1" \
+            --llm-under-test="OPENAI::HuggingFaceTB/SmolLM2-135M-Instruct::dummy::${{ env.ROUTER_URL }}" \
             --num-test-cases="$NUM_CASES" \
             --max-tokens="$MAX_TOKENS" \
             --enable-cache \

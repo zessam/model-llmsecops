@@ -23,7 +23,7 @@ targets:
       #
       # Ephemeral IP: recreating the Service assigns a new one and this breaks.
       # Reserve a static IP if the scan becomes routine.
-      url: http://136.116.192.130/v1/chat/completions
+      url: http://35.202.148.173/v1/chat/completions
       method: POST
       headers:
         Content-Type: application/json
