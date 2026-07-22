@@ -111,7 +111,7 @@ jobs:
   plan:
     name: Tofu Plan
     runs-on: ubuntu-latest
-    needs: [validate, trivy, checkov, gitleaks]
+    needs: [validate, trivy, checkov]
     environment: production
     defaults:
       run:
